@@ -1,0 +1,11 @@
+[project]
+name = "pygoofish"
+version = "0.1.0"
+description = "闲鱼的api协议库/sign的python实现"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.28.1",
+    "pillow>=11.3.0",
+    "qrcode>=8.2",
+]
