@@ -2,10 +2,14 @@ import asyncio
 from core.login import Login
 
 
-if __name__ == "__main__":
+async def async_login():
     login = Login()
-    cookie = asyncio.run(login.get_mh5tk())
-    login.add_cookie_to_headers(cookie)
-    asyncio.run(login.generate_login_qrcode())
-    results = asyncio.run(login.get_access_token())
-    print(results)
+    await login.get_mh5tk()
+    await login.generate_login_qrcode()
+    access_token = await login.get_access_token()
+    print(access_token)
+    print(login.get_cookie_str())
+
+
+if __name__ == "__main__":
+    asyncio.run(async_login())

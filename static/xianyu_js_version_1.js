@@ -11,12 +11,12 @@ const generate_uuid = () => {
 const generate_device_id = (user_id) => {
     for (var ee, et = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".split(""), en = [], eo = Math.random, ei = 0; ei < 36; ei++)
         8 === ei || 13 === ei || 18 === ei || 23 === ei ? en[ei] = "-" : 14 === ei ? en[ei] = "4" : (ee = 0 | 16 * eo(),
-        en[ei] = et[19 === ei ? 3 & ee | 8 : ee]);
+            en[ei] = et[19 === ei ? 3 & ee | 8 : ee]);
     return en.join("") + "-" + user_id
 }
 
 
-const generate_sign = (t ,token, data) => {
+const generate_sign = (t, token, data) => {
     const j = t
     const h = 34839810
     const msg = token + "&" + j + "&" + h + "&" + data
@@ -115,10 +115,10 @@ function rK() {
                 oi(ee);
         case 202:
             if (ee = eh.getFloat32(rA),
-            rj.useFloat32 > 2) {
+                rj.useFloat32 > 2) {
                 var eE = oC[(127 & ec[rA]) << 1 | ec[rA + 1] >> 7];
                 return rA += 4,
-                (eE * ee + (ee > 0 ? .5 : -.5) >> 0) / eE
+                    (eE * ee + (ee > 0 ? .5 : -.5) >> 0) / eE
             }
             return rA += 4,
                 ee;
@@ -181,19 +181,19 @@ function rK() {
             return oi(16);
         case 217:
             if (ee = ec[rA++],
-            rB >= rA)
+                rB >= rA)
                 return ef.slice(rA - rF, (rA += ee) - rF);
             return r3(ee);
         case 218:
             if (ee = eh.getUint16(rA),
                 rA += 2,
-            rB >= rA)
+                rB >= rA)
                 return ef.slice(rA - rF, (rA += ee) - rF);
             return r4(ee);
         case 219:
             if (ee = eh.getUint32(rA),
                 rA += 4,
-            rB >= rA)
+                rB >= rA)
                 return ef.slice(rA - rF, (rA += ee) - rF);
             return r5(ee);
         case 220:
@@ -218,7 +218,7 @@ function rK() {
             if (void 0 === et) {
                 var eT = Error("Unexpected end of MessagePack data");
                 throw eT.incomplete = !0,
-                    eT
+                eT
             }
             throw Error("Unknown MessagePack token " + et)
     }
@@ -257,7 +257,7 @@ function r6(ee) {
 }
 rz = /^(?:[A-Za-z\d+\/]{4})*?(?:[A-Za-z\d+\/]{2}(?:==)?|[A-Za-z\d+\/]{3}=?)?$/
 rH = String.fromCharCode.bind(String)
-rV = "function" == typeof Uint8Array.from ? Uint8Array.from.bind(Uint8Array) : function(ee) {
+rV = "function" == typeof Uint8Array.from ? Uint8Array.from.bind(Uint8Array) : function (ee) {
     return new Uint8Array(Array.prototype.slice.call(ee, 0))
 }
 r0 = r6;
@@ -408,7 +408,7 @@ function ol() {
         return rA--,
             ou(rK());
     if (et -= 160,
-    rB >= rA)
+        rB >= rA)
         return ef.slice(rA - rF, (rA += et) - rF);
     if (!(0 == rB && eu < 180))
         return r0(et);
@@ -437,8 +437,8 @@ function ol() {
             ei = rA
     }
     for (eo = [],
-             os[en] = eo,
-             eo.bytes = et; ei < ed;)
+        os[en] = eo,
+        eo.bytes = et; ei < ed;)
         ee = eh.getUint32(ei),
             eo.push(ee),
             ei += 4;

@@ -7,7 +7,7 @@ import httpx
 import qrcode
 import qrcode.constants
 
-from .sign_tool import SignTool
+from utils.sign_tool import SignTool
 from utils import generate_headers
 
 
@@ -27,6 +27,7 @@ class Login:
 
     def __init__(self):
         self.params = {}
+        self.cookies = {}
         self.headers = generate_headers()
         self.host = "https://passport.goofish.com"
         self.api_mini_login = f"{self.host}/mini_login.htm"
@@ -37,19 +38,14 @@ class Login:
             "https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/"
         )
 
-    def _cookie_unmarshal(self, cookie_str: str):
-        cookie = {}
-        for i in cookie_str.split("; "):
-            k = i.split("=")[0]
-            v = i.split("=")[1]
-            cookie[k] = v
-        return cookie
+    def _cookie_marshal(self, cookies: dict):
+        return "; ".join([f"{k}={v}" for k, v in cookies.items()])
 
     def get_cookie_dict(self) -> dict:
-        return self._cookie_unmarshal(self.get_cookie_str())
+        return self.cookies
 
     def get_cookie_str(self) -> str:
-        return self.headers.get("cookie")
+        return self._cookie_marshal(self.cookies)
 
     def add_cookie_to_headers(self, data: dict) -> None:
         """通过给定的dict追加headers的值"""
@@ -81,10 +77,11 @@ class Login:
             resp = await client.post(
                 self.api_h5_tk, params=params, headers=self.headers
             )
-            cookie = {}
+            cookies = {}
             for k, v in resp.cookies.items():
-                cookie[k] = v
-            return cookie
+                cookies[k] = v
+                self.cookies[k] = v
+            return cookies
 
     async def get_access_token(self) -> dict:
         """获取access_token"""
@@ -119,7 +116,11 @@ class Login:
         params["sign"] = sign
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.post(
-                self.api_pc_login_token, params=params, headers=self.headers, data=data
+                self.api_pc_login_token,
+                params=params,
+                headers=self.headers,
+                cookies=self.cookies,
+                data=data,
             )
             return resp.json()
 
@@ -141,7 +142,10 @@ class Login:
         }
         async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.get(
-                self.api_mini_login, params=self.params, headers=self.headers
+                self.api_mini_login,
+                params=self.params,
+                cookies=self.cookies,
+                headers=self.headers,
             )
             pattern = r"window\.viewData\s*=\s*(\{.*?\});"
             # 正则匹配需要的json数据
@@ -161,11 +165,12 @@ class Login:
             resp = await client.post(
                 self.api_scan_status,
                 data=self.params,
+                cookies=self.cookies,
                 headers=self.headers,
             )
             return resp
 
-    async def generate_login_qrcode(self):
+    async def generate_login_qrcode(self) -> dict | None:
         """获取登录二维码"""
 
         async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -209,8 +214,8 @@ class Login:
                         # 将cookie保存为字典形式
                         for k, v in resp.cookies.items():
                             cookie[k] = v
-                        self.add_cookie_to_headers(cookie)
-                        break
+                            self.cookies[k] = v
+                        return cookie
                     elif qrcode_status == "NEW":
                         continue  # 二维码未被扫描，继续轮询
                     elif qrcode_status == "EXPIRED":

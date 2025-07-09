@@ -34,7 +34,7 @@ function sg() {
         return aG--,
             sy(a5());
     if (et -= 160,
-    aX >= aG)
+        aX >= aG)
         return eR.slice(aG - aq, (aG += et) - aq);
     if (!(0 == aX && eO < 180))
         return se(et);
@@ -63,8 +63,8 @@ function sg() {
             ei = aG
     }
     for (eo = [],
-             sv[en] = eo,
-             eo.bytes = et; ei < ec;)
+        sv[en] = eo,
+        eo.bytes = et; ei < ec;)
         ee = eZ.getUint32(ei),
             eo.push(ee),
             ei += 4;
@@ -105,16 +105,16 @@ function a3(ee) {
     }
     if (aW.randomAccessStructure && eI[aG] < 64 && eI[aG] >= 32 && ej ? (et = ej(eI, aG, eO, aW),
         eI = null,
-    !(ee && ee.lazy) && et && (et = et.toJSON()),
+        !(ee && ee.lazy) && et && (et = et.toJSON()),
         aG = eO) : et = a5(),
-    eD && (aG = eD.postBundlePosition,
-        eD = null),
-    aJ && (eP.restoreStructures = null),
-    aG == eO)
+        eD && (aG = eD.postBundlePosition,
+            eD = null),
+        aJ && (eP.restoreStructures = null),
+        aG == eO)
         eP && eP.restoreStructures && a4(),
             eP = null,
             eI = null,
-        eL && (eL = null);
+            eL && (eL = null);
     else if (aG > eO)
         throw Error("Unexpected end of MessagePack data");
     else if (!aJ) {
@@ -398,10 +398,10 @@ function a5() {
                 sh(ee);
         case 202:
             if (ee = eZ.getFloat32(aG),
-            aW.useFloat32 > 2) {
+                aW.useFloat32 > 2) {
                 var ev = sT[(127 & eI[aG]) << 1 | eI[aG + 1] >> 7];
                 return aG += 4,
-                (ev * ee + (ee > 0 ? .5 : -.5) >> 0) / ev
+                    (ev * ee + (ee > 0 ? .5 : -.5) >> 0) / ev
             }
             return aG += 4,
                 ee;
@@ -464,19 +464,19 @@ function a5() {
             return sh(16);
         case 217:
             if (ee = eI[aG++],
-            aX >= aG)
+                aX >= aG)
                 return eR.slice(aG - aq, (aG += ee) - aq);
             return st(ee);
         case 218:
             if (ee = eZ.getUint16(aG),
                 aG += 2,
-            aX >= aG)
+                aX >= aG)
                 return eR.slice(aG - aq, (aG += ee) - aq);
             return sn(ee);
         case 219:
             if (ee = eZ.getUint32(aG),
                 aG += 4,
-            aX >= aG)
+                aX >= aG)
                 return eR.slice(aG - aq, (aG += ee) - aq);
             return sr(ee);
         case 220:
@@ -501,7 +501,7 @@ function a5() {
             if (void 0 === et) {
                 var eC = Error("Unexpected end of MessagePack data");
                 throw eC.incomplete = !0,
-                    eC
+                eC
             }
             throw Error("Unknown MessagePack token " + et)
     }
@@ -519,7 +519,7 @@ const decrypt = (ee) => {
     et.buffer || et.constructor !== ArrayBuffer || (et = "undefined" != typeof Buffer ? Buffer.from(et) : new Uint8Array(et)),
         "object" == typeof en ? (eO = en.end || et.length,
             aG = en.start || 0) : (aG = 0,
-            eO = en > -1 ? en : et.length),
+                eO = en > -1 ? en : et.length),
         aX = 0,
         eR = null,
         eD = null,
