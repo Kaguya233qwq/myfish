@@ -7,5 +7,6 @@ requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.28.1",
     "pillow>=11.3.0",
+    "pyexecjs2>=1.6.1",
     "qrcode>=8.2",
 ]
