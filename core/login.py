@@ -209,13 +209,29 @@ class Login:
                         .get("qrCodeStatus")
                     )
                     if qrcode_status == "CONFIRMED":
-                        print("用户信息已确认，登录成功")
-                        cookie = {}
-                        # 将cookie保存为字典形式
-                        for k, v in resp.cookies.items():
-                            cookie[k] = v
-                            self.cookies[k] = v
-                        return cookie
+                        if (
+                            resp.json()
+                            .get("content", {})
+                            .get("data", {})
+                            .get("iframeRedirect")
+                            is True
+                        ):
+                            print("您的帐号被风控，需要前往以下网址通过手机验证码登录")
+                            print(
+                                resp.json()
+                                .get("content", {})
+                                .get("data", {})
+                                .get("iframeRedirectUrl")
+                            )
+                            return
+                        else:
+                            print("用户信息已确认，登录成功")
+                            cookie = {}
+                            # 将cookie保存为字典形式
+                            for k, v in resp.cookies.items():
+                                cookie[k] = v
+                                self.cookies[k] = v
+                            return cookie
                     elif qrcode_status == "NEW":
                         continue  # 二维码未被扫描，继续轮询
                     elif qrcode_status == "EXPIRED":
