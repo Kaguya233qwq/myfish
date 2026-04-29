@@ -1,0 +1,17 @@
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+
+myfish_auth.json
+*.log
+.vscode/
+.idea/
+
+plugins/
+data/
+
+README.md
+LICENSE
+.gitignore
