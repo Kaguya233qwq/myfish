@@ -21,7 +21,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: your_docker_name/myfish
+          images: kaguya233qwq/myfish
           tags: |
             type=ref,event=tag
             type=raw,value=latest
