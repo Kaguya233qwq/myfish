@@ -27,7 +27,7 @@ jobs:
 
       - name: 删除多余的二进制库
         run: |
-          cd src/myfish/libs
+          cd src/myfish/adapters/fish/libs
           find . -type f \( -name "*.so" -o -name "*.dll" \) ! -name "${{ matrix.lib }}" -exec rm -f {} +
           echo "Success.Using: ${{ matrix.lib }}"
 
