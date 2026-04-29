@@ -1,0 +1,58 @@
+name: 构建并发布 Python 轮子
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-wheels:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - plat: manylinux2014_x86_64
+            lib: sign_core_linux.so
+          - plat: manylinux2014_aarch64
+            lib: sign_core_linux_arm64.so
+          - plat: win_amd64
+            lib: sign_core_win.dll
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: 删除多余的二进制库
+        run: |
+          cd src/myfish/libs
+          find . -type f \( -name "*.so" -o -name "*.dll" \) ! -name "${{ matrix.lib }}" -exec rm -f {} +
+          echo "Success.Using: ${{ matrix.lib }}"
+
+      - name: 使用 uv 构建专属轮子
+        env:
+          MYFISH_TARGET_PLATFORM: ${{ matrix.plat }}
+        run: uv build --wheel
+
+      - name: 上传 Wheel 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.plat }}
+          path: dist/*.whl
+
+  publish-to-pypi:
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: 下载所有打好的轮子
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 发布到 PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
