@@ -3,9 +3,6 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# C extensions
-*.so
-
 # Distribution / packaging
 .Python
 build/
@@ -206,4 +203,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-login.png
+# ----
+*_auth.json
+myfish_*
+plugins/
+data/
