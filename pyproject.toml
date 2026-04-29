@@ -42,11 +42,6 @@ build-backend = "hatchling.build"
 packages = ["src/myfish"]
 artifacts = ["src/myfish/adapters/fish/libs/*.dll", "src/myfish/adapters/fish/libs/*.so"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/myfish/adapters/fish/libs/sign_core_win.dll" = "myfish/adapters/fish/libs/sign_core_win.dll"
-"src/myfish/adapters/fish/libs/sign_core_linux.so" = "myfish/adapters/fish/libs/sign_core_linux.so"
-"src/myfish/adapters/fish/libs/sign_core_linux_arm64.so" = "myfish/adapters/fish/libs/sign_core_linux_arm64.so"
-
 [tool.hatch.build.targets.sdist]
 include = ["/src", "/README.md", "/LICENSE"]
 artifacts = ["src/myfish/adapters/fish/libs/*.dll", "src/myfish/adapters/fish/libs/*.so"]
