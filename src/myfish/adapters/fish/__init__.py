@@ -10,9 +10,11 @@ import qrcode.constants
 import websockets
 from loguru import logger
 
+from myfish.core.registry import AdapterRegistry
+
 from .api import FishAPI
 from .sign import decrypt, generate_mid, generate_uuid
-from .utils import rm_local_auth, load_local_auth
+from .utils import load_local_auth, rm_local_auth
 from .message import auto_encode
 
 from myfish.core.bot import Bot
@@ -20,9 +22,9 @@ from myfish.core.message import (
     MessageChain,
     MessageSegment,
 )
-from myfish.core.adapter import BaseAdapter, OnReceiveCallback
+from myfish.core.adapter import AdapterMetaData, BaseAdapter, OnReceiveCallback
 
-FishBot = Bot["FishWebSocketAdapter"]
+FishBot = Bot["FishAdapter"]
 
 
 async def qrcode_login(client: FishAPI):
@@ -128,18 +130,34 @@ async def ensure_auth(client: FishAPI):
     return await qrcode_login(client)
 
 
-class FishWebSocketAdapter(BaseAdapter):
-    """闲鱼WebSocket适配器"""
+@AdapterRegistry.register
+class FishAdapter(BaseAdapter["FishAPI"]):
+    """闲鱼适配器"""
 
-    def __init__(self):
+    meta_data = AdapterMetaData(
+        id="fish",
+        name="闲鱼适配器",
+        description="闲鱼Web端的WebSocket连接实现",
+        version="1.0.0",
+        author="Kaguya233qwq",
+    )
+
+    def __init__(self, api: FishAPI):
         self.base_url = "wss://wss-goofish.dingtalk.com/"
-        cookies = load_local_auth()
-        self.api = FishAPI(cookies=cookies)
-        self.myid = self.api.cookies_dict.get("unb", "")
+        super().__init__(api)
 
         self._active_ws: Optional[websockets.ClientConnection] = None
         self._bg_tasks = []
         self._on_receive_callback: Optional[OnReceiveCallback] = None
+
+    @classmethod
+    def setup(cls, **kwargs) -> "FishAdapter":
+        cookies = kwargs.get("cookies")
+        if not cookies:
+            cookies = load_local_auth()
+        api_instance = FishAPI(cookies=cookies)
+
+        return cls(api=api_instance)
 
     def _get_headers(self) -> dict:
         cookie_str = "; ".join([f"{k}={v}" for k, v in self.api.cookies_dict.items()])
@@ -283,7 +301,7 @@ class FishWebSocketAdapter(BaseAdapter):
                     "mtags": {},
                     "msgReadStatusSetting": 1,
                 },
-                {"actualReceivers": [f"{target_id}@goofish", f"{self.myid}@goofish"]},
+                {"actualReceivers": [f"{target_id}@goofish", f"{self.bot_id}@goofish"]},
             ],
         }
 
@@ -340,7 +358,7 @@ class FishWebSocketAdapter(BaseAdapter):
                     continue
 
                 sender = incoming_msg.data.sender
-                if not sender.user_id or str(sender.user_id) == str(self.myid):
+                if not sender.user_id or str(sender.user_id) == str(self.bot_id):
                     continue
 
                 msg_chain = incoming_msg.data.content.to_message_chain()
@@ -367,18 +385,12 @@ class FishWebSocketAdapter(BaseAdapter):
         except Exception as e:
             logger.exception(f"[FishWSAdapter] Driver 清洗数据时发生异常: {e}")
 
-    async def run(self):
-        """启动 Driver"""
-        await ensure_auth(self.api)
-
-        headers = self._get_headers()
-        self._bg_tasks.append(asyncio.create_task(self._keep_token_alive_loop()))
-
+    async def _connect_ws(self):
         while True:
             try:
                 logger.info("[FishWSAdapter] 尝试连接 WebSocket 服务器...")
                 async with websockets.connect(
-                    self.base_url, additional_headers=headers
+                    self.base_url, additional_headers=self._get_headers()
                 ) as ws:
                     self._active_ws = ws
                     if not await self._init_connection():
@@ -396,3 +408,12 @@ class FishWebSocketAdapter(BaseAdapter):
                 self._active_ws = None
                 logger.error(f"[FishWSAdapter] 发生致命错误: {e}")
                 await asyncio.sleep(5)
+
+    async def run(self):
+        """启动 Driver"""
+        valid_cookies = await ensure_auth(self.api)
+        if valid_cookies:
+            self.bot_id = valid_cookies.get("unb", "")
+
+        self._bg_tasks.append(asyncio.create_task(self._keep_token_alive_loop()))
+        await self._connect_ws()

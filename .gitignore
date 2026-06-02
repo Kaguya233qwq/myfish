@@ -204,7 +204,6 @@ marimo/_lsp/
 __marimo__/
 
 # ----
-*_auth.json
-myfish_*
 plugins/
 data/
+config.toml

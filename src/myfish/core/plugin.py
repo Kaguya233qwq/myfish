@@ -9,9 +9,10 @@ from .rule import Rule, is_fullmatch, is_keywords, is_regex, is_startswith
 class PluginMetadata:
     id: str
     name: str
-    description: str
+    description: str = ""
     version: str = "1.0.0"
     author: str = "Unknown"
+    support_adapters: List[str] | None = None
 
 
 class Plugin:

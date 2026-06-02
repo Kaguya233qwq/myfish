@@ -4,6 +4,8 @@ import os
 import sys
 from pathlib import Path
 
+from myfish.core.registry import AdapterRegistry
+
 from .logger import logger
 
 from .plugin import Plugin
@@ -38,9 +40,7 @@ class PluginManager:
                 self.user_plugins_dir.mkdir(parents=True, exist_ok=True)
                 logger.info(f"已自动创建外部插件目录: {self.user_plugins_dir}")
             except PermissionError:
-                logger.warning(
-                    f"无法创建插件目录 {self.user_plugins_dir}，权限不足。"
-                )
+                logger.warning(f"无法创建插件目录 {self.user_plugins_dir}，权限不足。")
 
         if self.user_plugins_dir.exists():
             self._load_from_dir(self.user_plugins_dir)
@@ -94,3 +94,37 @@ class PluginManager:
 
                 except Exception as e:
                     logger.error(f"❌ 加载插件 {file.name} 失败: {e}")
+
+
+def load_adapters(adapter_configs: list, engine):
+    """
+    动态加载适配器模块并挂载到引擎
+    """
+    if not adapter_configs:
+        logger.warning("配置文件中未提供任何适配器，bot 将无法连接任何平台。")
+        return
+
+    for conf in adapter_configs:
+        adapter_id = conf.id
+        module_name = getattr(conf, "module", None) or f"myfish.adapters.{adapter_id}"
+
+        try:
+            logger.debug(f"正在加载外部适配器包: {module_name}")
+            importlib.import_module(module_name)
+        except ImportError as e:
+            logger.error(
+                f"❌ 模块加载失败 [{module_name}]: {e}\n(请检查包名拼写或是否已安装相关依赖) "
+            )
+            continue
+
+        try:
+            logger.info(f"正在装载适配器: [{adapter_id}]...")
+            config_dict = getattr(conf, "config", {})
+            adapter_instance = AdapterRegistry.build(adapter_id, **config_dict)
+            engine.add_adapter(adapter_instance)
+            logger.success(f"✅ 适配器 [{adapter_id}] 装载成功")
+
+        except ValueError as e:
+            logger.error(f"⚠️ 适配器 [{adapter_id}] 配置错误: {e}")
+        except Exception as e:
+            logger.exception(f"❌ 装载适配器 [{adapter_id}] 时发生未知错误: {e}")

@@ -1,8 +1,10 @@
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Union
+from typing import Any, Awaitable, Callable, TypeVar, Union
 
 
 from . import message
+
+T = TypeVar("T", bound=message.MessageSegment)
 
 
 @dataclass
@@ -28,17 +30,24 @@ class MessageEvent:
         if self._callback_func:
             await self._callback_func(msg)
 
+    def has_type(self, *msg_classes: type[message.MessageSegment]) -> bool:
+        """
+        判断消息链中是否包含某些类型。支持传入多个类型
+        """
+        return any(isinstance(seg, msg_classes) for seg in self.messages)
+
+    def get_segments(self, msg_class: type[T]) -> list[T]:
+        """
+        提取消息链中指定类型的所有消息段
+        """
+        return [seg for seg in self.messages if isinstance(seg, msg_class)]
+
     @property
     def plain_text(self) -> str:
         """获取消息纯文本"""
         return "".join(
             [seg.text for seg in self.messages if isinstance(seg, message.Text)]
         )
-
-    @property
-    def has_image(self) -> bool:
-        """判断是否包含图片"""
-        return any(isinstance(seg, message.Image) for seg in self.messages)
 
     @property
     def summary(self) -> str:

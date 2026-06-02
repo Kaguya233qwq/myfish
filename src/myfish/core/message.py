@@ -1,6 +1,7 @@
-from typing import Any
+import os
+from typing import Any, Iterable, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MessageSegment(BaseModel):
@@ -10,6 +11,7 @@ class MessageSegment(BaseModel):
 
     type: str = "unknown"
     desc: str = "未知"
+    extra: dict[str, Any] = Field(default_factory=dict)
 
     def __add__(self, other: Any) -> "MessageChain":
         return MessageChain([self]) + other
@@ -43,13 +45,51 @@ class Audio(MessageSegment):
     duration_ms: int = 0
 
 
+class Video(MessageSegment):
+    type: str = "video"
+    desc: str = "视频"
+    video_url: str
+    thumb_url: str = ""
+    width: int = 0
+    height: int = 0
+    duration_ms: int = 0
+
+
+class File(MessageSegment):
+    """扩展核心：文件消息"""
+
+    type: str = "file"
+    desc: str = "文件"
+    file_id: str
+    file_name: str
+    file_size: int = 0
+
+    @property
+    def extension(self) -> str:
+        """
+        获取文件扩展名
+        """
+        _, ext = os.path.splitext(self.file_name)
+        return ext.lstrip(".").lower()
+
+    def is_type(self, *extensions: str) -> bool:
+        """
+        断言文件类型，支持传入多个后缀名进行匹配
+        """
+        clean_exts = [e.lstrip(".").lower() for e in extensions]
+        return self.extension in clean_exts
+
+
 class CustomNode(MessageSegment):
     type: str = "node"
     desc: str = "节点消息"
     content: dict[str, Any] = {}
 
 
-class MessageChain(list):
+AppendableItem = Union[str, MessageSegment, Iterable[Union[str, MessageSegment]]]
+
+
+class MessageChain(list[MessageSegment]):
     """
     核心消息链类
     """
@@ -64,7 +104,7 @@ class MessageChain(list):
         else:
             self.append(segments)
 
-    def append(self, item: Any) -> None:
+    def append(self, item: AppendableItem) -> None:
         """重写 append 方法，支持直接添加字符串或消息段对象"""
         if isinstance(item, str):
             super().append(Text(text=item))
@@ -75,21 +115,21 @@ class MessageChain(list):
         else:
             raise ValueError(f"不支持的消息片段类型: {type(item)}")
 
-    def extend(self, items: Any) -> None:
+    def extend(self, items: Iterable[Union[str, MessageSegment]]) -> None:
         for item in items:
             self.append(item)
 
-    def __add__(self, other: Any) -> "MessageChain":
+    def __add__(self, other: AppendableItem) -> "MessageChain":  # pyright: ignore[reportIncompatibleMethodOverride]
         result = MessageChain(self)
         result.append(other)
         return result
 
-    def __radd__(self, other: Any) -> "MessageChain":
+    def __radd__(self, other: AppendableItem) -> "MessageChain":
         result = MessageChain([other])
         result.extend(self)
         return result
 
-    def __iadd__(self, other: Any) -> "MessageChain":
+    def __iadd__(self, other: AppendableItem) -> "MessageChain":
         self.append(other)
         return self
 

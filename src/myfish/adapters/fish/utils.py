@@ -1,8 +1,9 @@
 import json
-import os
 from pathlib import Path
 
 from loguru import logger
+
+from myfish.core.storage import StorageManager
 
 
 def generate_headers() -> dict[str, str]:
@@ -15,45 +16,41 @@ def generate_headers() -> dict[str, str]:
     }
 
 
-_default_data_dir = Path.cwd() / "data"
-DATA_DIR = Path(os.getenv("MYFISH_DATA_DIR", str(_default_data_dir)))
-AUTH_FILE = DATA_DIR / "myfish_auth.json"
+def _get_auth_file() -> Path:
+    """动态获取闲鱼适配器的鉴权文件路径"""
+    return StorageManager.get_adapter_dir("fish") / "auth.json"
 
 
 def load_local_auth() -> dict:
-    """从本地读取Cookie"""
-    if AUTH_FILE.exists():
+    """从本地读取 Cookie"""
+    auth_file = _get_auth_file()
+    if auth_file.exists():
         try:
-            return json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+            return json.loads(auth_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            logger.warning(f"本地鉴权文件损坏 [{AUTH_FILE.name}]，将重新登录。")
+            logger.warning(f"本地鉴权文件损坏 [{auth_file.name}]，将重新登录。")
     return {}
 
 
 def save_local_auth(cookies: dict):
-    """持久化Cookie到本地"""
-    if not DATA_DIR.exists():
-        try:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            logger.info(f"已创建持久化数据目录: {DATA_DIR}")
-        except PermissionError:
-            logger.error(f"无法创建数据目录 {DATA_DIR}，请检查文件夹权限！")
-            return
+    """持久化 Cookie 到本地"""
+    auth_file = _get_auth_file()
 
     try:
-        AUTH_FILE.write_text(
+        auth_file.write_text(
             json.dumps(cookies, indent=4, ensure_ascii=False), encoding="utf-8"
         )
-        logger.success(f"凭证已成功保存至: {AUTH_FILE.resolve()}")
+        logger.success(f"凭证已成功保存至: {auth_file.resolve()}")
     except Exception as e:
         logger.error(f"保存凭证失败: {e}")
 
 
 def rm_local_auth():
-    """删除本地Cookie文件"""
-    if AUTH_FILE.exists():
+    """删除本地 Cookie 文件"""
+    auth_file = _get_auth_file()
+    if auth_file.exists():
         try:
-            AUTH_FILE.unlink()
-            logger.info(f"已删除本地凭证文件: {AUTH_FILE.name}")
+            auth_file.unlink()
+            logger.info(f"已删除本地凭证文件: {auth_file.name}")
         except Exception as e:
             logger.error(f"删除凭证文件失败: {e}")
