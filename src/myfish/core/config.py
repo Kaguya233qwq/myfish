@@ -106,11 +106,11 @@ superusers = []
 # ==========================================
 # 你可以取消下方的注释来启用对应的适配器。
 
-# 🐟 官方闲鱼适配器
-# [[adapters]]
-# id = "fish"
-# [adapters.config]
-# cookies = ""
+# 🐟 闲鱼适配器
+[[adapters]]
+id = "fish"
+[adapters.config]
+cookies = "" # 不填则扫码登陆
 
 # 🦞 微信ClawBot适配器 (ilink)
 # [[adapters]]
