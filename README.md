@@ -44,11 +44,11 @@
 ```bash
 uv pip install myfish
 
-# 初始化项目并生成 config.toml
+# 初始化项目
 myfish init my-project
 cd my-project
 
-# 启动引擎
+# 启动引擎自动生成config.toml
 myfish run
 
 ```
@@ -70,16 +70,14 @@ uv run src/myfish/main.py
 新建 `docker-compose.yml`：
 
 ```yml
-version: '3.8'
-
 services:
   myfish:
     image: kaguya233qwq/myfish:latest
     container_name: myfish
-    restart: always
     environment:
       - TZ=Asia/Shanghai
       - MYFISH_CONFIG_PATH=/app/data/config.toml
+    network_mode: host # 或者指定你的自定义虚拟网络
     volumes:
       - ./plugins:/app/plugins
       - ./data:/app/data
@@ -131,7 +129,7 @@ async def handle_user_info(event: MessageEvent, bot: FishBot):
 
 ## 🔌 开发适配器 (Adapter)
 
-Myfish 核心采用两阶段初始化与注册表装配协议。开发自定义适配器必须继承 `BaseAdapter` 并实现 `setup` 组装流水线。
+Myfish 核心采用两阶段初始化与注册表装配协议。开发自定义适配器必须继承 `BaseAdapter` 并实现 `setup` 初始化。
 
 ```python
 import json
