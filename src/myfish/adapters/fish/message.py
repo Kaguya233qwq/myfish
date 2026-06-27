@@ -183,6 +183,15 @@ class FishTradeCardNode(FishPayloadNode):
             }
         return data
 
+    @classmethod
+    def decode(cls, payload: dict) -> list[MessageSegment]:
+        try:
+            # Pydantic 实例化时会自动触发 pre_process 进行字段解析
+            node = cls(**payload)
+            return [node.to_core()]
+        except Exception as e:
+            return []
+    
     def to_core(self) -> FishTradeCard:
         return FishTradeCard(
             title=self.title,
