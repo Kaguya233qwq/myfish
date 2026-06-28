@@ -186,10 +186,12 @@ class FishTradeCardNode(FishPayloadNode):
     @classmethod
     def decode(cls, payload: dict) -> list[MessageSegment]:
         try:
-            # Pydantic 实例化时会自动触发 pre_process 进行字段解析
-            node = cls(**payload)
+            # 使用 model_validate 进行解析，代替原生的解包 cls(**payload)
+            node = cls.model_validate(payload)
             return [node.to_core()]
         except Exception as e:
+            # 记录错误日志，防止严重漏单而无处排查
+            logger.error(f"[FishTradeCardNode] 交易动态卡片解析失败: {e} | 数据: {payload}")
             return []
     
     def to_core(self) -> FishTradeCard:
