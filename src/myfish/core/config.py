@@ -56,13 +56,13 @@ class ConfigManager:
             try:
                 data = tomllib.load(f)
                 logger.success(f"成功加载配置文件: {config_path.resolve()}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"解析 TOML 文件失败，请检查语法: {e}")
                 sys.exit(1)
 
         try:
             cls._config = BotConfig(**data)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"配置内容校验失败，请检查字段类型:\n{e}")
             sys.exit(1)
 
@@ -112,6 +112,10 @@ superusers = []
 id = "fish"
 [adapters.config]
 cookies = "" # 不填则扫码登陆
+# 可选：订单状态跟踪，只读同步；不会自动发货或评价
+# track_orders = true
+# order_poll_interval = 60
+# order_max_pages = 5
 
 # 🦞 微信ClawBot适配器 (ilink)
 # [[adapters]]
@@ -123,7 +127,7 @@ cookies = "" # 不填则扫码登陆
             with open(toml_path, "w", encoding="utf-8") as f:
                 f.write(default_toml)
             logger.info(f"未检测到配置文件，已为您自动生成默认配置: {toml_path}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"自动生成默认配置文件失败: {e}")
 
 

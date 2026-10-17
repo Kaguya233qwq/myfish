@@ -1,6 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from . import message
 
@@ -8,8 +8,17 @@ T = TypeVar("T", bound=message.MessageSegment)
 
 
 @dataclass
-class MessageEvent:
+class BaseEvent:
+    """适配器事件基类；平台业务字段由适配器自己的事件类型定义。"""
+
+    event_type: ClassVar[str] = "event"
+
+
+@dataclass
+class MessageEvent(BaseEvent):
     """消息事件上下文（Context），封装了当前消息的所有信息及快捷操作"""
+
+    event_type: ClassVar[str] = "message"
 
     cid: str  # 会话 ID
     sender_id: str  # 发送者 ID

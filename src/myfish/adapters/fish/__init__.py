@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import math
 import sys
 import time
 import urllib.parse
@@ -9,7 +10,6 @@ import qrcode
 import qrcode.constants
 import websockets
 from loguru import logger
-
 from myfish.core.adapter import AdapterMetaData, BaseAdapter, OnReceiveCallback
 from myfish.core.bot import Bot
 from myfish.core.message import (
@@ -19,8 +19,9 @@ from myfish.core.message import (
 from myfish.core.registry import AdapterRegistry
 
 from .api import FishAPI
-from .message import auto_encode
+from .message import FishTradeCard, auto_encode
 from .sign import decrypt, generate_mid, generate_uuid
+from .tracking import OrderTracker
 from .utils import load_local_auth, rm_local_auth
 from .verification import verify_identity
 
@@ -91,7 +92,9 @@ async def qrcode_login(client: FishAPI):
                             if token.get("data", {}).get("accessToken"):
                                 return client.cookies_dict
                             client.client.headers.pop("cookie", None)
-                        logger.info("身份验证已通过，登录会话尚未建立，正在生成新的登录二维码，请再次扫码确认。")
+                        logger.info(
+                            "身份验证已通过，登录会话尚未建立，正在生成新的登录二维码，请再次扫码确认。"
+                        )
                         # 沿用验证后的会话及 Cookie，不再轮询已失效的旧二维码。
                         qr_data = await client.qrcode_gen()
                         if not qr_data or not qr_data.get("content"):
@@ -176,13 +179,34 @@ class FishAdapter(BaseAdapter["FishAPI"]):
         author="Kaguya233qwq",
     )
 
-    def __init__(self, api: FishAPI):
+    def __init__(
+        self,
+        api: FishAPI,
+        *,
+        track_orders: bool = False,
+        order_poll_interval: float = 60,
+        order_max_pages: int = 5,
+    ):
+        if not isinstance(track_orders, bool):
+            raise TypeError("track_orders 必须是布尔值")
+        if not math.isfinite(order_poll_interval) or order_poll_interval < 10:
+            raise ValueError("order_poll_interval 必须是至少 10 秒的有限数值")
+        if (
+            isinstance(order_max_pages, bool)
+            or not isinstance(order_max_pages, int)
+            or not 1 <= order_max_pages <= 100
+        ):
+            raise ValueError("order_max_pages 必须在 1 到 100 之间")
         self.base_url = "wss://wss-goofish.dingtalk.com/"
         super().__init__(api)
 
         self._active_ws: websockets.ClientConnection | None = None
         self._bg_tasks = []
         self._on_receive_callback: OnReceiveCallback | None = None
+        self.track_orders = track_orders
+        self.order_poll_interval = order_poll_interval
+        self.order_max_pages = order_max_pages
+        self.order_tracker: OrderTracker | None = None
 
     @classmethod
     def setup(cls, **kwargs) -> "FishAdapter":
@@ -191,7 +215,12 @@ class FishAdapter(BaseAdapter["FishAPI"]):
             cookies = load_local_auth()
         api_instance = FishAPI(cookies=cookies)
 
-        return cls(api=api_instance)
+        return cls(
+            api=api_instance,
+            track_orders=kwargs.get("track_orders", False),
+            order_poll_interval=kwargs.get("order_poll_interval", 60),
+            order_max_pages=kwargs.get("order_max_pages", 5),
+        )
 
     def _get_headers(self) -> dict:
         cookie_str = "; ".join([f"{k}={v}" for k, v in self.api.cookies_dict.items()])
@@ -362,7 +391,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
 
                 parsed_dict = None
                 try:
-                    json.loads(raw_data)
+                    parsed_dict = json.loads(raw_data)
                 except json.JSONDecodeError:
                     try:
                         decrypted_str = decrypt(raw_data)
@@ -397,6 +426,10 @@ class FishAdapter(BaseAdapter["FishAPI"]):
                     continue
 
                 msg_chain = incoming_msg.data.content.to_message_chain()
+                if self.order_tracker and any(
+                    isinstance(segment, FishTradeCard) for segment in msg_chain
+                ):
+                    self.order_tracker.request_sync()
                 if not msg_chain:
                     return
 
@@ -446,12 +479,37 @@ class FishAdapter(BaseAdapter["FishAPI"]):
 
     async def run(self):
         """启动 Driver"""
-        valid_cookies = await ensure_auth(self.api)
-        if not valid_cookies or not valid_cookies.get("unb"):
-            logger.error("闲鱼登录未完成，停止启动适配器。")
-            await self.api.close()
-            return
-        self.bot_id = valid_cookies.get("unb", "")
+        try:
+            valid_cookies = await ensure_auth(self.api)
+            if not valid_cookies or not valid_cookies.get("unb"):
+                logger.error("闲鱼登录未完成，停止启动适配器。")
+                return
+            self.bot_id = valid_cookies.get("unb", "")
+            if self.track_orders:
+                from myfish.core.storage import StorageManager
 
-        self._bg_tasks.append(asyncio.create_task(self._keep_token_alive_loop()))
-        await self._connect_ws()
+                account_id = self.api._trade_id(self.bot_id)
+                self.order_tracker = OrderTracker(
+                    self.api,
+                    account_id,
+                    self._emit_order_event,
+                    state_path=StorageManager.get_adapter_dir("fish")
+                    / f"orders-{account_id}.json",
+                    interval=self.order_poll_interval,
+                    max_pages=self.order_max_pages,
+                )
+                self._bg_tasks.append(asyncio.create_task(self.order_tracker.run()))
+            self._bg_tasks.append(asyncio.create_task(self._keep_token_alive_loop()))
+            await self._connect_ws()
+        finally:
+            for task in self._bg_tasks:
+                task.cancel()
+            if self._bg_tasks:
+                await asyncio.gather(*self._bg_tasks, return_exceptions=True)
+            self._bg_tasks.clear()
+            self.order_tracker = None
+            await self.api.close()
+
+    async def _emit_order_event(self, event):
+        if self._on_receive_callback:
+            await self._on_receive_callback(event)

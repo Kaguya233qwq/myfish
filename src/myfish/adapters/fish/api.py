@@ -8,7 +8,6 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 from loguru import logger
-
 from myfish.core.adapter import BaseAPI
 
 from .sign import generate_device_id, generate_sign
@@ -72,6 +71,7 @@ class FishAPI(BaseAPI):
         data_dict: dict,
         extra_params: dict | None = None,
         spm_cnt: str | None = "a21ybx.im.0.0",
+        headers: dict[str, str] | None = None,
     ) -> dict:
         """
         核心封装：统一处理阿里 MTOP 协议的签名和请求构建
@@ -106,18 +106,193 @@ class FishAPI(BaseAPI):
         payload: dict[str, str] = {"data": data_val}
         url = f"https://h5api.m.goofish.com/h5/{api_name.lower()}/{version}/"
         latest_cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies_dict.items())
-        self.client.headers["cookie"] = latest_cookie_str
-
-        resp = await self.client.post(url, params=params, data=payload)
+        request_headers = {"cookie": latest_cookie_str, **(headers or {})}
+        resp = await self.client.post(
+            url, params=params, data=payload, headers=request_headers
+        )
         resp.raise_for_status()
 
         # 更新Cookie
         self.save_cookies(resp)
         res_json = resp.json()
-        if "ret" in res_json and not any("SUCCESS" in r for r in res_json["ret"]):
-            logger.warning(f"API 调用返回异常: {res_json}")
+        if not isinstance(res_json, dict):
+            raise FishAPIError("MTOP 返回了非对象响应")
+        ret = res_json.get("ret", [])
+        if not isinstance(ret, list) or not any(
+            str(item).split("::", 1)[0] == "SUCCESS" for item in ret
+        ):
+            logger.warning(
+                "API 调用返回异常: api={}，ret={}",
+                api_name,
+                [str(item).split("::", 1)[0] for item in ret]
+                if isinstance(ret, list)
+                else [],
+            )
 
         return res_json
+
+    async def _trade_request(
+        self, api: str, data: dict, version: str = "1.0", *, seller: bool = False
+    ) -> dict:
+        """交易请求不自动重试；失败不能当作空列表或动作成功。"""
+        headers = None
+        if seller:
+            headers = {
+                "origin": "https://seller.goofish.com",
+                "referer": "https://seller.goofish.com/",
+            }
+        result = await self._call_mtop(
+            api,
+            version,
+            data,
+            extra_params={"valueType": "string"} if seller else None,
+            spm_cnt="a21107h.42826273.0.0" if seller else "a21ybx.im.0.0",
+            headers=headers,
+        )
+        ret = result.get("ret", [])
+        if not isinstance(ret, list) or not any(
+            str(item).split("::", 1)[0] == "SUCCESS" for item in ret
+        ):
+            # 不把完整响应（可能有验证码 URL、订单信息）写入异常。
+            codes = (
+                [str(item).split("::", 1)[0] for item in ret]
+                if isinstance(ret, list)
+                else []
+            )
+            raise FishAPIError(
+                f"{api} 调用失败: {','.join(codes) or 'INVALID_RESPONSE'}"
+            )
+        return result
+
+    @staticmethod
+    def _trade_id(value: str) -> str:
+        value = str(value).strip()
+        if not value or not value.isascii() or not value.isdigit():
+            raise ValueError("订单、商品及用户 ID 必须为数字字符串")
+        return value
+
+    @staticmethod
+    def _trade_page(page: int, page_size: int):
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError("page 必须为正整数")
+        if (
+            isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or not 1 <= page_size <= 100
+        ):
+            raise ValueError("page_size 必须在 1 到 100 之间")
+
+    async def get_sold_orders(
+        self, page: int = 1, page_size: int = 20, query_code: str = "ALL"
+    ) -> dict:
+        """卖出订单列表；query_code 支持 ALL、NOT_SHIP。"""
+        self._trade_page(page, page_size)
+        if query_code not in {"ALL", "NOT_SHIP"}:
+            raise ValueError("query_code 仅支持 ALL、NOT_SHIP")
+        return await self._trade_request(
+            "mtop.taobao.idle.trade.merchant.sold.get",
+            {
+                "pageNumber": page,
+                "rowsPerPage": page_size,
+                "orderIds": "",
+                "queryCode": query_code,
+                "orderSearchParam": "{}",
+            },
+            seller=True,
+        )
+
+    async def get_order_detail(self, order_id: str) -> dict:
+        """订单详情，状态节点位于 data.components 的 orderStatusVO 中。"""
+        return await self._trade_request(
+            "mtop.idle.web.trade.order.detail", {"tid": self._trade_id(order_id)}
+        )
+
+    async def ship_order(
+        self, order_id: str, trade_text: str = "", pic_list: list[str] | None = None
+    ) -> dict:
+        """标记无需物流发货，不负责发送卡密，也不适用于填写快递单号。"""
+        return await self._trade_request(
+            "mtop.taobao.idle.logistic.consign.dummy",
+            {
+                "orderId": self._trade_id(order_id),
+                "tradeText": trade_text.strip(),
+                "picList": pic_list or [],
+                "newUnconsign": True,
+            },
+        )
+
+    async def request_red_flower(self, order_id: str) -> dict:
+        """调用平台求小红花能力"""
+        return await self._trade_request(
+            "mtop.taobao.idlemessage.red.flower",
+            {
+                "orderId": self._trade_id(order_id),
+                "channel": "list",
+            },
+        )
+
+    async def rate_buyer(self, order_id: str, feedback: str = "不错的买家") -> dict:
+        """卖家提交首次好评"""
+        if not feedback.strip():
+            raise ValueError("评价内容不能为空")
+        return await self._trade_request(
+            "mtop.taobao.idle.rate.create",
+            {
+                "tradeId": self._trade_id(order_id),
+                "rate": 1,
+                "feedback": feedback.strip(),
+                "createOrAppend": 0,
+            },
+            version="4.0",
+        )
+
+    async def get_pending_ratings(self, page: int = 1, page_size: int = 20) -> dict:
+        """卖家端待评价列表。"""
+        self._trade_page(page, page_size)
+        return await self._trade_request(
+            "mtop.taobao.idle.merchant.rate.list",
+            {
+                "pageNumber": page,
+                "rowsPerPage": page_size,
+                "queryType": "ORDER",
+                "rateSearchParam": {"sellerRateStatus": "5"},
+            },
+            seller=True,
+        )
+
+    async def get_refund_orders(
+        self, dispute_status: str = "1", page: int = 1, page_size: int = 20
+    ) -> dict:
+        """退款列表；1/2/3 为退款中，5 为退款成功"""
+        self._trade_page(page, page_size)
+        if dispute_status not in {"1", "2", "3", "5"}:
+            raise ValueError("dispute_status 仅支持 1、2、3、5")
+        return await self._trade_request(
+            "mtop.taobao.idle.merchant.refund.list",
+            {
+                "pageNumber": page,
+                "rowsPerPage": page_size,
+                "queryType": "refund",
+                "refundSearchParam": {
+                    "disputeStatus": dispute_status,
+                    "queryCode": "ALL",
+                },
+            },
+            seller=True,
+        )
+
+    async def skip_bargain_and_ship(
+        self, order_id: str, item_id: str, buyer_id: str
+    ) -> dict:
+        """小刀/拼团订单免拼发货"""
+        return await self._trade_request(
+            "mtop.idle.groupon.activity.seller.freeshipping",
+            {
+                "bizOrderId": self._trade_id(order_id),
+                "itemId": int(self._trade_id(item_id)),
+                "buyerId": int(self._trade_id(buyer_id)),
+            },
+        )
 
     async def _get_login_params(self) -> dict[str, Any]:
         """获取二维码登录时需要的表单参数"""
