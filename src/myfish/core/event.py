@@ -1,6 +1,6 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, TypeVar, Union
-
+from typing import Any, TypeVar
 
 from . import message
 
@@ -21,9 +21,7 @@ class MessageEvent:
         default=None, repr=False
     )
 
-    async def reply(
-        self, msg: Union[str, message.MessageSegment, message.MessageChain]
-    ):
+    async def reply(self, msg: str | message.MessageSegment | message.MessageChain):
         """回复一条消息"""
         if isinstance(msg, str):
             msg = message.Text(text=msg)

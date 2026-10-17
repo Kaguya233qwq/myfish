@@ -3,8 +3,7 @@ import asyncio
 from myfish.core.config import load_config
 from myfish.core.engine import Engine
 from myfish.core.loader import load_adapters
-from myfish.core.logger import init_logger
-from myfish.core.logger import logger
+from myfish.core.logger import init_logger, logger
 
 
 async def main():

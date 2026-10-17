@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Optional
+
 from myfish.core.logger import logger
 from myfish.core.storage import StorageManager  # 引入统一存储管理器
 
@@ -10,7 +10,7 @@ def _get_cred_path() -> Path:
     return StorageManager.get_adapter_dir("ilink") / "auth.json"
 
 
-def load_credentials() -> Optional[dict]:
+def load_credentials() -> dict | None:
     """读取本地凭证"""
     cred_path = _get_cred_path()
     if not cred_path.exists():

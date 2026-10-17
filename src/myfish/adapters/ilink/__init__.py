@@ -1,20 +1,20 @@
 import asyncio
 import base64
 import time
-import qrcode
+
 import httpx
-from typing import Union
-from myfish.core.bot import Bot
-from myfish.core.logger import logger
+import qrcode
+
 from myfish.core.adapter import AdapterMetaData, BaseAdapter
-from myfish.core.message import MessageChain, MessageSegment
+from myfish.core.bot import Bot
 from myfish.core.event import MessageEvent
+from myfish.core.logger import logger
+from myfish.core.message import MessageChain, MessageSegment
 from myfish.core.registry import AdapterRegistry
 
 from .api import ILinkAPI
-from .auth import load_credentials, save_credentials, clear_credentials
+from .auth import clear_credentials, load_credentials, save_credentials
 from .message import ILinkMessage, Typing, auto_encode_ilink
-
 
 ClawBot = Bot["ILinkAdapter"]
 
@@ -119,7 +119,7 @@ class ILinkAdapter(BaseAdapter["ILinkAPI"]):
     async def send(
         self,
         target_id: str,
-        message: Union[MessageSegment, MessageChain],
+        message: MessageSegment | MessageChain,
         cid: str = "",
     ):
         if not self.api.bot_token:

@@ -1,12 +1,13 @@
-from typing import Dict, Type
+from typing import ClassVar
+
 from myfish.core.adapter import BaseAdapter
 
 
 class AdapterRegistry:
-    _adapters: Dict[str, Type[BaseAdapter]] = {}
+    _adapters: ClassVar[dict[str, type[BaseAdapter]]] = {}
 
     @classmethod
-    def register(cls, adapter_class: Type[BaseAdapter]) -> Type[BaseAdapter]:
+    def register(cls, adapter_class: type[BaseAdapter]) -> type[BaseAdapter]:
         """
         适配器注册装饰器
         """

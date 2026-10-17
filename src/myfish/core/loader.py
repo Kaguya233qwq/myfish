@@ -7,7 +7,6 @@ from pathlib import Path
 from myfish.core.registry import AdapterRegistry
 
 from .logger import logger
-
 from .plugin import Plugin
 
 

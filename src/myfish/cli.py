@@ -1,7 +1,8 @@
 import argparse
-import sys
 import runpy
+import sys
 from pathlib import Path
+
 from loguru import logger
 
 
@@ -31,7 +32,7 @@ def init_project(project_name: str):
         logger.success(f"🎉 初始化 Myfish 工作区成功: {project_name}")
         logger.info(f"👉 下一步请执行:\n    cd {project_name}\n    myfish run")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"❌ 初始化失败: {e}")
 
 
@@ -55,7 +56,7 @@ def run_bot():
 
     except KeyboardInterrupt:
         logger.info("bot已手动停止。")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.exception(f"❌ 运行过程中发生致命错误: {e}")
 
 

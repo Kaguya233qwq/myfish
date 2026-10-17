@@ -1,28 +1,28 @@
 import asyncio
 import base64
 import json
+import sys
 import time
 import urllib.parse
-from typing import Optional, Union
 
 import qrcode
 import qrcode.constants
 import websockets
 from loguru import logger
 
-from myfish.core.registry import AdapterRegistry
-
-from .api import FishAPI
-from .sign import decrypt, generate_mid, generate_uuid
-from .utils import load_local_auth, rm_local_auth
-from .message import auto_encode
-
+from myfish.core.adapter import AdapterMetaData, BaseAdapter, OnReceiveCallback
 from myfish.core.bot import Bot
 from myfish.core.message import (
     MessageChain,
     MessageSegment,
 )
-from myfish.core.adapter import AdapterMetaData, BaseAdapter, OnReceiveCallback
+from myfish.core.registry import AdapterRegistry
+
+from .api import FishAPI
+from .message import auto_encode
+from .sign import decrypt, generate_mid, generate_uuid
+from .utils import load_local_auth, rm_local_auth
+from .verification import verify_identity
 
 FishBot = Bot["FishAdapter"]
 
@@ -35,7 +35,7 @@ async def qrcode_login(client: FishAPI):
     qr_data = await client.qrcode_gen()
     if not qr_data:
         logger.error("二维码生成失败，程序退出。")
-        exit(1)
+        sys.exit(1)
     content = qr_data.get("content")
     if content:
         qr = qrcode.QRCode(
@@ -49,14 +49,16 @@ async def qrcode_login(client: FishAPI):
         qr.print_ascii(invert=True)
     else:
         logger.error("二维码数据缺失，程序退出。")
-        exit(1)
+        sys.exit(1)
 
     t = qr_data.get("t", "")
     ck = qr_data.get("ck", "")
 
     # 开始轮询状态
     is_scanned = False
-    while True:
+    verification_attempted = False
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
         await asyncio.sleep(1.5)
         status = await client.qrcode_poll(t, ck)
         if status.get("status") == "CONFIRMED":
@@ -78,10 +80,42 @@ async def qrcode_login(client: FishAPI):
             logger.info("用户在手机端取消了登录")
             break
         elif status.get("status") == "ERROR":
-            logger.warning(
-                "您的帐号被风控，需要前往以下网址通过手机验证码登录："
-                f"{status.get('redirect_url', '')}"
-            )
+            redirect_url = status.get("redirect_url")
+            if isinstance(redirect_url, str) and redirect_url:
+                if not verification_attempted:
+                    verification_attempted = True
+                    if await verify_identity(client, redirect_url):
+                        deadline = time.monotonic() + 120
+                        if client.cookies_dict.get("unb"):
+                            token = await client.get_token()
+                            if token.get("data", {}).get("accessToken"):
+                                return client.cookies_dict
+                            client.client.headers.pop("cookie", None)
+                        logger.info("身份验证已通过，登录会话尚未建立，正在生成新的登录二维码，请再次扫码确认。")
+                        # 沿用验证后的会话及 Cookie，不再轮询已失效的旧二维码。
+                        qr_data = await client.qrcode_gen()
+                        if not qr_data or not qr_data.get("content"):
+                            logger.error("验证后的登录二维码生成失败。")
+                            return None
+                        qr = qrcode.QRCode(border=2)
+                        qr.add_data(qr_data["content"])
+                        qr.make(fit=True)
+                        qr.print_ascii(invert=True)
+                        t = qr_data.get("t", "")
+                        ck = qr_data.get("ck", "")
+                        is_scanned = False
+                        deadline = time.monotonic() + 600
+                        continue
+                logger.warning(
+                    "登录需要额外验证，请在浏览器打开以下网址并按页面提示完成验证："
+                    f"{redirect_url}"
+                )
+                logger.info("完成验证后，请重新启动并扫码登录。")
+            else:
+                logger.warning(
+                    "登录需要额外验证，但服务端未返回有效的验证网址。"
+                    "请先在闲鱼 App 或官网完成登录及安全验证，再重新扫码。"
+                )
             break
         else:
             print(f"未知的二维码状态: {status}")
@@ -105,7 +139,7 @@ async def ensure_auth(client: FishAPI):
             )
             logger.error(punish_url)
             await client.close()
-            exit(1)
+            sys.exit(1)
         if isinstance(res, dict) and "FAIL_SYS_SESSION_EXPIRED" in str(res):
             logger.warning("会话已过期，需要重新登陆")
             # 删除过期凭证
@@ -146,9 +180,9 @@ class FishAdapter(BaseAdapter["FishAPI"]):
         self.base_url = "wss://wss-goofish.dingtalk.com/"
         super().__init__(api)
 
-        self._active_ws: Optional[websockets.ClientConnection] = None
+        self._active_ws: websockets.ClientConnection | None = None
         self._bg_tasks = []
-        self._on_receive_callback: Optional[OnReceiveCallback] = None
+        self._on_receive_callback: OnReceiveCallback | None = None
 
     @classmethod
     def setup(cls, **kwargs) -> "FishAdapter":
@@ -190,7 +224,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
                 ack["headers"][key] = req_headers[key]
         try:
             await self._active_ws.send(json.dumps(ack))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"ACK 发送失败: {e}")
 
     async def _init_connection(self):
@@ -256,7 +290,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
                 await asyncio.sleep(600)
                 try:
                     await self.api.get_access_token()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
         except asyncio.CancelledError:
             pass
@@ -264,7 +298,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
     async def send(
         self,
         target_id: str,
-        message: Union[MessageSegment, MessageChain],
+        message: MessageSegment | MessageChain,
         cid: str = "",
     ):
         """将Message对象打包成底层WebSocket消息格式并发送"""
@@ -336,7 +370,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
                             parsed_dict = decrypted_str
                         else:
                             parsed_dict = json.loads(decrypted_str)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.debug(f"[FishWSAdapter] 无法按正常流程解密: {e}")
                         base64_decripted = base64.b64decode(raw_data).decode()
                         logger.debug(
@@ -350,6 +384,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
                 logger.debug(f"[FishWSAdapter] Received raw message: {parsed_dict}")
 
                 from pydantic import ValidationError
+
                 from .message import RecievedMessagePayload
 
                 try:
@@ -382,7 +417,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
                 if self._on_receive_callback:
                     await self._on_receive_callback(event)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception(f"[FishWSAdapter] Driver 清洗数据时发生异常: {e}")
 
     async def _connect_ws(self):
@@ -404,7 +439,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
                 self._active_ws = None
                 logger.warning("[FishWSAdapter] WebSocket断开，3秒后重连...")
                 await asyncio.sleep(3)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self._active_ws = None
                 logger.error(f"[FishWSAdapter] 发生致命错误: {e}")
                 await asyncio.sleep(5)
@@ -412,8 +447,11 @@ class FishAdapter(BaseAdapter["FishAPI"]):
     async def run(self):
         """启动 Driver"""
         valid_cookies = await ensure_auth(self.api)
-        if valid_cookies:
-            self.bot_id = valid_cookies.get("unb", "")
+        if not valid_cookies or not valid_cookies.get("unb"):
+            logger.error("闲鱼登录未完成，停止启动适配器。")
+            await self.api.close()
+            return
+        self.bot_id = valid_cookies.get("unb", "")
 
         self._bg_tasks.append(asyncio.create_task(self._keep_token_alive_loop()))
         await self._connect_ws()

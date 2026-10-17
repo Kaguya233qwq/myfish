@@ -1,5 +1,7 @@
 import re
-from typing import Callable, Union, Tuple, Any
+from collections.abc import Callable
+from typing import Any
+
 from .event import MessageEvent
 
 
@@ -26,19 +28,19 @@ def _get_text(event: MessageEvent) -> str:
     return event.plain_text
 
 
-def is_startswith(msg: Union[str, Tuple[str, ...]]) -> Rule:
+def is_startswith(msg: str | tuple[str, ...]) -> Rule:
     """匹配消息开头"""
     return Rule(lambda event: _get_text(event).startswith(msg))
 
 
-def is_fullmatch(msg: Union[str, Tuple[str, ...]]) -> Rule:
+def is_fullmatch(msg: str | tuple[str, ...]) -> Rule:
     """完全匹配消息"""
     if isinstance(msg, str):
         msg = (msg,)
     return Rule(lambda event: _get_text(event) in msg)
 
 
-def is_keywords(keyword: Union[str, Tuple[str, ...]]) -> Rule:
+def is_keywords(keyword: str | tuple[str, ...]) -> Rule:
     """包含关键字"""
     if isinstance(keyword, str):
         keyword = (keyword,)

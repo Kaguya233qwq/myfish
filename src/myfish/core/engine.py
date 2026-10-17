@@ -1,12 +1,13 @@
 import asyncio
 import inspect
-from typing import Any, Callable, get_origin, get_args
+from collections.abc import Callable
+from typing import Any, get_args, get_origin
 
-from .logger import logger
-from .event import MessageEvent
-from .loader import PluginManager
 from .adapter import BaseAdapter
 from .bot import Bot
+from .event import MessageEvent
+from .loader import PluginManager
+from .logger import logger
 
 
 class Engine:
@@ -45,7 +46,7 @@ class Engine:
                 await bot.send_msg(
                     target_id=event.sender_id, message=msg, cid=event.cid
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"发送回复消息失败: {e}")
 
         event._callback_func = _do_reply
@@ -80,7 +81,7 @@ class Engine:
 
                 await handler_func(**kwargs)
             except Exception as exc:
-                logger.exception(f"❌ 插件 [{plugin_name}] 执行崩溃: {exc}")
+                logger.exception(f"❌ 插件 [{plugin_name}] 执行崩溃: {exc}")  # noqa: TRY401
 
         adapter_id = bot.adapter.meta_data.id
         for plugin_name, plugin in self.plugin_manager.plugins.items():

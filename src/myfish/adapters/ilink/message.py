@@ -1,4 +1,5 @@
-from typing import Any, ClassVar, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, ClassVar
+
 from pydantic import BaseModel, Field
 
 from myfish.core.logger import logger
@@ -21,7 +22,7 @@ class ILinkPayloadNode(BaseModel):
     iLink 协议节点基类
     """
 
-    _registry: ClassVar[dict[int, Type["ILinkPayloadNode"]]] = {}
+    _registry: ClassVar[dict[int, type["ILinkPayloadNode"]]] = {}
     item_type: ClassVar[int] = 0
 
     def __init_subclass__(cls, **kwargs):

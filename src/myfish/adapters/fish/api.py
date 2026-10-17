@@ -3,7 +3,8 @@ import os
 import random
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from loguru import logger
@@ -61,7 +62,7 @@ class FishAPI(BaseAPI):
         if cookie_updated:
             try:
                 save_local_auth(self.cookies_dict)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"持久化 Cookie 失败: {e}")
 
     async def _call_mtop(
@@ -121,6 +122,7 @@ class FishAPI(BaseAPI):
     async def _get_login_params(self) -> dict[str, Any]:
         """获取二维码登录时需要的表单参数"""
 
+        self.client.headers.pop("cookie", None)
         url = "https://passport.goofish.com/mini_login.htm"
         self._poll_params = {
             "lang": "zh_cn",
@@ -132,7 +134,7 @@ class FishAPI(BaseAPI):
             "notKeepLogin": False,
             "isMobile": False,
             "qrCodeFirst": False,
-            "stie": 77,
+            "site": 77,
             "rnd": random.random(),
         }
         resp = await self.client.get(url, params=self._poll_params)
@@ -183,9 +185,35 @@ class FishAPI(BaseAPI):
         resp.raise_for_status()
         data = resp.json().get("content", {}).get("data", {})
         if data.get("iframeRedirect"):
+            logger.debug(
+                "扫码登录要求额外验证：qrCodeStatus={}，响应字段={}，"
+                "HTTP状态={}（不记录 Cookie 和登录票据）",
+                data.get("qrCodeStatus", "UNKNOWN"),
+                sorted(data),
+                resp.status_code,
+            )
+            # iframeRedirect 是跳转标志，验证地址通常位于独立字段中。
+            redirect_url = ""
+            for candidate in (
+                data.get("iframeRedirectUrl"),
+                data.get("url"),
+                data.get("redirectUrl"),
+                data.get("iframeRedirect"),
+            ):
+                if not isinstance(candidate, str):
+                    continue
+                candidate = candidate.strip()
+                if candidate.startswith("//"):
+                    candidate = "https:" + candidate
+                elif candidate.startswith("/"):
+                    candidate = urljoin(url, candidate)
+                parsed = urlsplit(candidate)
+                if parsed.scheme in ("http", "https") and parsed.netloc:
+                    redirect_url = candidate
+                    break
             return {
                 "status": "ERROR",
-                "redirect_url": data["iframeRedirect"],
+                "redirect_url": redirect_url,
             }
         status = data.get("qrCodeStatus", "UNKNOWN")
         if status == "CONFIRMED":
@@ -280,7 +308,7 @@ class FishAPI(BaseAPI):
             resp.raise_for_status()
             return resp.json()
 
-    async def get_public_channel(self, title: str, images_info: List[dict]) -> dict:
+    async def get_public_channel(self, title: str, images_info: list[dict]) -> dict:
         """获取商品分类等推荐频道信息"""
         data = {
             "title": title,
@@ -331,10 +359,10 @@ class FishAPI(BaseAPI):
 
     async def publish_item(
         self,
-        images_path: List[str],
+        images_path: list[str],
         goods_desc: str,
-        price: Optional[Dict[str, float]],
-        ds: Dict[str, Any],
+        price: dict[str, float] | None,
+        ds: dict[str, Any],
     ) -> dict:
         """
         发布商品

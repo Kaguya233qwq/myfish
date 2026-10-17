@@ -1,10 +1,11 @@
 # myfish/core/config.py
 import os
-from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pathlib import Path
+from typing import Any
+
 from loguru import logger
+from pydantic import BaseModel, Field
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -19,7 +20,7 @@ class AdapterConfig(BaseModel):
     """单个适配器的配置模型"""
 
     id: str
-    config: Dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class BotConfig(BaseModel):
@@ -30,14 +31,14 @@ class BotConfig(BaseModel):
     cmd_prefix: str = "/"
 
     data_dir: str = "data"  # 默认数据存储目录
-    superusers: List[str] = Field(default_factory=list)
-    adapters: List[AdapterConfig] = Field(default_factory=list)
+    superusers: list[str] = Field(default_factory=list)
+    adapters: list[AdapterConfig] = Field(default_factory=list)
 
 
 class ConfigManager:
     """全局配置管理器，负责加载和提供 Bot 配置"""
 
-    _config: Optional[BotConfig] = None
+    _config: BotConfig | None = None
 
     @classmethod
     def load_config(cls) -> BotConfig:

@@ -1,6 +1,7 @@
 from typing import Generic
+
 from .adapter import AdapterT
-from .message import MessageSegment, MessageChain
+from .message import MessageChain, MessageSegment
 
 
 class Bot(Generic[AdapterT]):

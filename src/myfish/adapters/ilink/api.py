@@ -2,15 +2,15 @@ import base64
 import os
 import struct
 import urllib.parse
-from uuid import uuid4
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
 from myfish.core.adapter import BaseAPI
 from myfish.core.logger import logger
 
-from .crypto import decrypt_aes_ecb, generate_aes_key, get_md5, encrypt_aes_ecb
+from .crypto import decrypt_aes_ecb, encrypt_aes_ecb, generate_aes_key, get_md5
 
 CHANNEL_VERSION = "1.0.2"
 ILINK_APP_ID = "bot"

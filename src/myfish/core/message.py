@@ -1,5 +1,6 @@
 import os
-from typing import Any, Iterable, Union
+from collections.abc import Iterable
+from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
@@ -86,7 +87,7 @@ class CustomNode(MessageSegment):
     content: dict[str, Any] = {}
 
 
-AppendableItem = Union[str, MessageSegment, Iterable[Union[str, MessageSegment]]]
+AppendableItem = str | MessageSegment | Iterable[str | MessageSegment]
 
 
 class MessageChain(list[MessageSegment]):
@@ -113,9 +114,9 @@ class MessageChain(list[MessageSegment]):
         elif isinstance(item, list):
             self.extend(item)
         else:
-            raise ValueError(f"不支持的消息片段类型: {type(item)}")
+            raise TypeError(f"不支持的消息片段类型: {type(item)}")
 
-    def extend(self, items: Iterable[Union[str, MessageSegment]]) -> None:
+    def extend(self, items: Iterable[str | MessageSegment]) -> None:
         for item in items:
             self.append(item)
 
@@ -129,7 +130,7 @@ class MessageChain(list[MessageSegment]):
         result.extend(self)
         return result
 
-    def __iadd__(self, other: AppendableItem) -> "MessageChain":
+    def __iadd__(self, other: AppendableItem) -> Self:
         self.append(other)
         return self
 

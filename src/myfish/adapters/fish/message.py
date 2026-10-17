@@ -1,7 +1,7 @@
 import base64
 import json
 import re
-from typing import Any, ClassVar, Type
+from typing import Any, ClassVar
 
 from pydantic import (
     BaseModel,
@@ -52,7 +52,7 @@ class FishPayloadNode(BaseModel):
     闲鱼协议节点基类
     """
 
-    _registry: ClassVar[dict[int, Type["FishPayloadNode"]]] = {}
+    _registry: ClassVar[dict[int, type["FishPayloadNode"]]] = {}
 
     content_type: ClassVar[int] = 0
 
@@ -191,9 +191,11 @@ class FishTradeCardNode(FishPayloadNode):
             return [node.to_core()]
         except Exception as e:
             # 记录错误日志，防止严重漏单而无处排查
-            logger.error(f"[FishTradeCardNode] 交易动态卡片解析失败: {e} | 数据: {payload}")
+            logger.error(
+                f"[FishTradeCardNode] 交易动态卡片解析失败: {e} | 数据: {payload}"
+            )
             return []
-    
+
     def to_core(self) -> FishTradeCard:
         return FishTradeCard(
             title=self.title,
@@ -225,7 +227,7 @@ class FishCustomNode(FishPayloadNode):
                         segments.append(Text(**item))
                     elif item.get("type") == "image":
                         segments.append(Image(**item))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"解析自定义富文本消息失败: {e}")
         return segments
 
@@ -313,7 +315,7 @@ class MessageBody(BaseModel):
                 inner_payload = v.get("3", {}).get("5")
                 if isinstance(inner_payload, str):
                     return json.loads(inner_payload)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         return v if isinstance(v, dict) else {}
 

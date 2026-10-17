@@ -1,6 +1,7 @@
 from collections import defaultdict
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, List, Optional, Tuple, Union
+from typing import Any
 
 from .rule import Rule, is_fullmatch, is_keywords, is_regex, is_startswith
 
@@ -12,16 +13,16 @@ class PluginMetadata:
     description: str = ""
     version: str = "1.0.0"
     author: str = "Unknown"
-    support_adapters: List[str] | None = None
+    support_adapters: list[str] | None = None
 
 
 class Plugin:
     def __init__(self, metadata: PluginMetadata):
         self.metadata = metadata
-        self.message_handlers: List[dict] = []
+        self.message_handlers: list[dict] = []
         self.event_handlers: dict[str, list[dict]] = defaultdict(list)
 
-    def on_message(self, rule: Optional[Union[Rule, Callable]] = None):
+    def on_message(self, rule: Rule | Callable | None = None):
         """注册一个消息处理器
         rule参数可以是一个Rule对象或者一个可调用的函数
         """
@@ -35,7 +36,7 @@ class Plugin:
 
         return decorator
 
-    def on_event(self, event_type: str, rule: Optional[Union[Rule, Callable]] = None):
+    def on_event(self, event_type: str, rule: Rule | Callable | None = None):
         """注册一个特定类型的事件处理器
         rule参数可以是一个Rule对象或者一个可调用的函数
         """
@@ -54,8 +55,8 @@ class Plugin:
 
     def on_startswith(
         self,
-        msg: Union[str, Tuple[str, ...]],
-        rule: Optional[Union[Rule, Callable]] = None,
+        msg: str | tuple[str, ...],
+        rule: Rule | Callable | None = None,
     ):
         """注册一个匹配消息开头的处理器"""
         match_rule = is_startswith(msg)
@@ -67,8 +68,8 @@ class Plugin:
 
     def on_fullmatch(
         self,
-        msg: Union[str, Tuple[str, ...]],
-        rule: Optional[Union[Rule, Callable]] = None,
+        msg: str | tuple[str, ...],
+        rule: Rule | Callable | None = None,
     ):
         """注册一个完全匹配消息的处理器"""
         match_rule = is_fullmatch(msg)
@@ -80,8 +81,8 @@ class Plugin:
 
     def on_keywords(
         self,
-        keywords: Union[str, Tuple[str, ...]],
-        rule: Optional[Union[Rule, Callable]] = None,
+        keywords: str | tuple[str, ...],
+        rule: Rule | Callable | None = None,
     ):
         """注册一个包含关键字的处理器"""
         match_rule = is_keywords(keywords)
@@ -92,7 +93,7 @@ class Plugin:
         return self.on_message(rule=combined_rule)
 
     def on_regex(
-        self, pattern: str, flags: int = 0, rule: Optional[Union[Rule, Callable]] = None
+        self, pattern: str, flags: int = 0, rule: Rule | Callable | None = None
     ):
         """注册一个正则匹配的处理器"""
         match_rule = is_regex(pattern, flags)

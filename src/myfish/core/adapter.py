@@ -1,15 +1,13 @@
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Generic, TypeVar
-
+from typing import Any, Generic, TypeVar
 
 from .message import MessageChain, MessageSegment
 
 
 class BaseAPI:
     """API基类"""
-
-    pass
 
 
 API_T = TypeVar("API_T", bound="BaseAPI")
