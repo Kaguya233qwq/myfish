@@ -46,7 +46,8 @@ class PluginManager:
 
     def _load_from_dir(self, directory: Path) -> None:
         """
-        核心装载引擎：从指定绝对路径动态扫描并加载插件。
+        加载目录内的单文件插件，以及通过 __init__.py 暴露 Plugin 的包。
+        包内子模块由包入口自行导入，不作为独立插件递归扫描。
         """
         if not directory.is_dir():
             return
@@ -57,13 +58,18 @@ class PluginManager:
 
         package_name = directory.name
 
-        for file in directory.iterdir():
-            if (
-                file.is_file()
-                and file.suffix == ".py"
-                and not file.name.startswith("_")
-            ):
-                module_name = f"{package_name}.{file.stem}"
+        for file in sorted(directory.iterdir(), key=lambda path: path.name):
+            if file.name.startswith(("_", ".")):
+                continue
+            is_module = file.is_file() and file.suffix == ".py"
+            is_package = file.is_dir() and (file / "__init__.py").is_file()
+            if is_module or is_package:
+                name = file.stem if is_module else file.name
+                # 同名包与 .py 同时存在时遵循 Python 的包优先规则，避免重复加载。
+                if is_module and (directory / name / "__init__.py").is_file():
+                    logger.warning(f"同名插件包优先，跳过单文件插件: {file.name}")
+                    continue
+                module_name = f"{package_name}.{name}"
 
                 try:
                     module = importlib.import_module(module_name)
@@ -91,7 +97,7 @@ class PluginManager:
                             f"模块 {file.name} 中未找到 Plugin 实例，已跳过。"
                         )
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"❌ 加载插件 {file.name} 失败: {e}")
 
 
@@ -126,4 +132,4 @@ def load_adapters(adapter_configs: list, engine):
         except ValueError as e:
             logger.error(f"⚠️ 适配器 [{adapter_id}] 配置错误: {e}")
         except Exception as e:
-            logger.exception(f"❌ 装载适配器 [{adapter_id}] 时发生未知错误: {e}")
+            logger.exception(f"❌ 装载适配器 [{adapter_id}] 时发生未知错误: {e}")  # noqa: TRY401
