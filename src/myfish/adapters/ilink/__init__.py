@@ -110,7 +110,7 @@ class ILinkAdapter(BaseAdapter["ILinkAPI"]):
                     retry_count += 1
                     continue
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"[ILink] 鉴权流程异常: {e}")
                 return False
 
@@ -150,7 +150,7 @@ class ILinkAdapter(BaseAdapter["ILinkAPI"]):
             else:
                 logger.error(f"[ILink] 发送失败: {res}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"[ILink] 发送异常: {e}")
 
     async def _handle_raw_message(self, raw_msg: dict):
@@ -212,7 +212,7 @@ class ILinkAdapter(BaseAdapter["ILinkAPI"]):
 
             await self.api.send_typing(target_id, ticket, status=status)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"[ILink] 发送输入状态失败: {e}")
 
     async def download_media(self, segment: MessageSegment) -> bytes:
@@ -252,7 +252,7 @@ class ILinkAdapter(BaseAdapter["ILinkAPI"]):
 
                 return decrypt_aes_ecb(raw_data, real_aes_key)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(
                     f"[ILink] 媒体解密失败，返回原始加密数据 (AES_KEY={aes_key_str}): {e}"
                 )
@@ -287,6 +287,6 @@ class ILinkAdapter(BaseAdapter["ILinkAPI"]):
                     else:
                         logger.error(f"[ILink] 接口返回错误: {exc}")
                         await asyncio.sleep(3)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"[ILink] 轮询异常: {e}")
                     await asyncio.sleep(3)

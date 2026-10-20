@@ -3,21 +3,26 @@
 import argparse
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from loguru import logger
+
 from myfish.adapters.fish.api import FishAPI, FishAPIError
 from myfish.adapters.fish.orders import parse_sold_orders
 
 
 async def check(auth_path: Path, order_id: str | None = None) -> dict:
     cookies = json.loads(auth_path.read_text(encoding="utf-8"))
-    report = {"checked_at": datetime.now(timezone.utc).isoformat(), "checks": {}}
+    report = {"checked_at": datetime.now(UTC).isoformat(), "checks": {}}
     async with FishAPI(cookies) as api:
         checks = {
             "sold_orders": api.get_sold_orders,
+            "bought_orders": lambda: api._trade_request(
+                "mtop.idle.web.trade.bought.list",
+                {"pageNumber": 1, "orderStatus": "ALL"},
+            ),
             "pending_ship_orders": lambda: api.get_sold_orders(query_code="NOT_SHIP"),
             "pending_ratings": api.get_pending_ratings,
             "refund_orders": api.get_refund_orders,
@@ -36,8 +41,20 @@ async def check(auth_path: Path, order_id: str | None = None) -> dict:
                     if name == "sold_orders":
                         orders, has_next = parse_sold_orders(response)
                         item.update(order_count=len(orders), has_next=has_next)
+                        item["reported_total"] = response["data"]["module"].get(
+                            "totalCount"
+                        )
                         if selected_order_id is None and orders:
                             selected_order_id = orders[0].order_id
+                    elif name == "bought_orders":
+                        data = response.get("data", {})
+                        if not isinstance(data.get("items"), list):
+                            raise ValueError("买入订单响应结构不受支持")
+                        item.update(
+                            order_count=len(data["items"]),
+                            has_next=str(data.get("nextPage")).lower() == "true",
+                            reported_total=data.get("totalCount"),
+                        )
                     report["checks"][name] = item
                 except FishAPIError as exc:
                     report["checks"][name] = {"result": "FAILED", "error": str(exc)}

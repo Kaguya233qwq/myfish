@@ -155,7 +155,7 @@ class ILinkAPI(BaseAPI):
             resp.raise_for_status()
             raw_data = resp.content
         else:
-            with open(file_url_or_path, "rb") as f:
+            with open(file_url_or_path, "rb") as f:  # noqa: ASYNC230
                 raw_data = f.read()
 
         raw_size = len(raw_data)
@@ -225,6 +225,6 @@ class ILinkAPI(BaseAPI):
 
             return decrypt_aes_ecb(raw_data, real_aes_key)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"[ILink] 媒体解密失败 (AES_KEY={aes_key_str}): {e}")
             return raw_data

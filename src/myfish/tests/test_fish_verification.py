@@ -3,13 +3,14 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
+from myfish.adapters.fish import _verify_identity as verify_identity
 from myfish.adapters.fish import qrcode_login
-from myfish.adapters.fish.verification import parse_verification_page, verify_identity
-
+from myfish.adapters.fish.api import FishAPI
+from myfish.adapters.fish.utils import parse_verification_page
 
 PAGE_URL = "https://passport.goofish.com/iv/mini/identity_verify.htm?htoken=test"
-PAGE = '''new Qrcode({text: "https://market.m.taobao.com/verify?token=test", width:166});
-jQuery.ajax({url:'https://passport.goofish.com/iv/photoVerify/check.do?htoken=test'});'''
+PAGE = """new Qrcode({text: "https://market.m.taobao.com/verify?token=test", width:166});
+jQuery.ajax({url:'https://passport.goofish.com/iv/photoVerify/check.do?htoken=test'});"""
 
 
 class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
@@ -20,13 +21,28 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
         def handle(request):
             requests.append(request)
             if request.url.path.endswith("mini_login_check.htm"):
-                return httpx.Response(302, headers={"location": "/iv/mini/normal_validate.htm", "set-cookie": "entry=one; Path=/"})
+                return httpx.Response(
+                    302,
+                    headers={
+                        "location": "/iv/mini/normal_validate.htm",
+                        "set-cookie": "entry=one; Path=/",
+                    },
+                )
             if request.url.path.endswith("normal_validate.htm"):
-                return httpx.Response(200, text='window.location.href = "/iv/mini/verify_modes.htm?htoken=test&firstIn=true&_umidfg="+window._iv_umidfg;', headers={"set-cookie": "normal=two; Path=/"})
+                return httpx.Response(
+                    200,
+                    text='window.location.href = "/iv/mini/verify_modes.htm?htoken=test&firstIn=true&_umidfg="+window._iv_umidfg;',
+                    headers={"set-cookie": "normal=two; Path=/"},
+                )
             if request.url.path.endswith("verify_modes.htm"):
-                return httpx.Response(302, headers={"location": PAGE_URL, "set-cookie": "modes=three; Path=/"})
+                return httpx.Response(
+                    302,
+                    headers={"location": PAGE_URL, "set-cookie": "modes=three; Path=/"},
+                )
             if request.url.path.endswith("identity_verify.htm"):
-                return httpx.Response(200, text=PAGE, headers={"set-cookie": "iv=session; Path=/"})
+                return httpx.Response(
+                    200, text=PAGE, headers={"set-cookie": "iv=session; Path=/"}
+                )
             if request.url.path.endswith("check.do"):
                 code = next(remaining)
                 return httpx.Response(
@@ -35,28 +51,52 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
                     headers={"set-cookie": f"verify_progress={code}; Path=/"},
                 )
             if request.url.path == "/done":
-                return httpx.Response(302, headers={"location": "/finished", "set-cookie": "unb=test; Path=/"})
+                return httpx.Response(
+                    302,
+                    headers={"location": "/finished", "set-cookie": "unb=test; Path=/"},
+                )
             return httpx.Response(200)
 
-        api = Mock()
+        api = FishAPI({})
+        await api.client.aclose()
         api.cookies_dict = {}
+
         def collect(response):
             api.cookies_dict.update(dict(response.cookies))
-        api.save_cookies.side_effect = collect
-        api.client = httpx.AsyncClient(transport=httpx.MockTransport(handle), follow_redirects=True)
+
+        api._save_cookies = Mock(side_effect=collect)
+        api.client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), follow_redirects=True
+        )
         try:
-            with patch("myfish.adapters.fish.verification.asyncio.sleep", new_callable=AsyncMock), \
-                    patch("myfish.adapters.fish.verification.qrcode.QRCode") as qr:
+            with (
+                patch(
+                    "myfish.adapters.fish.asyncio.sleep",
+                    new_callable=AsyncMock,
+                ),
+                patch("myfish.adapters.fish.qrcode.QRCode") as qr,
+            ):
                 entry_url = "https://passport.goofish.com/iv/remote/pc/mini_login_check.htm?havana_iv_token=test"
                 if login:
                     api.get_mh5tk = AsyncMock()
-                    api.qrcode_gen = AsyncMock(return_value={"content": "login", "t": "t", "ck": "ck"})
-                    api.qrcode_poll = AsyncMock(return_value={"status": "ERROR", "redirect_url": entry_url})
-                    api.get_token = AsyncMock(return_value={"data": {"accessToken": "test"}})
+                    api.qrcode_gen = AsyncMock(
+                        return_value={"content": "login", "t": "t", "ck": "ck"}
+                    )
+                    api.qrcode_poll = AsyncMock(
+                        return_value={"status": "ERROR", "redirect_url": entry_url}
+                    )
+                    api.get_token = AsyncMock(
+                        return_value={
+                            "ret": ["SUCCESS"],
+                            "data": {"accessToken": "test"},
+                        }
+                    )
                     with patch("myfish.adapters.fish.qrcode.QRCode", qr):
                         result = await qrcode_login(api)
                 else:
-                    result = await verify_identity(api, entry_url if entry else PAGE_URL)
+                    result = await verify_identity(
+                        api, entry_url if entry else PAGE_URL
+                    )
             return result, api, requests, qr
         finally:
             await api.client.aclose()
@@ -64,11 +104,13 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_success_session_and_callback(self):
         success, api, requests, qr = await self.run_flow([0, "1", 2, "3"])
         self.assertTrue(success)
-        qr.return_value.add_data.assert_called_once_with("https://market.m.taobao.com/verify?token=test")
+        qr.return_value.add_data.assert_called_once_with(
+            "https://market.m.taobao.com/verify?token=test"
+        )
         self.assertIn("iv=session", requests[1].headers["cookie"])
         self.assertEqual(requests[1].headers["referer"], PAGE_URL)
-        self.assertEqual(api.save_cookies.call_count, 7)
-        self.assertEqual(api.save_cookies.call_args_list[-2].args[0].status_code, 302)
+        self.assertEqual(api._save_cookies.call_count, 7)
+        self.assertEqual(api._save_cookies.call_args_list[-2].args[0].status_code, 302)
         self.assertEqual(api.cookies_dict["verify_progress"], "3")
         self.assertEqual(api.cookies_dict["unb"], "test")
         self.assertIn("verify_progress=0", requests[2].headers["cookie"])
@@ -87,7 +129,9 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(api.cookies_dict["normal"], "two")
         self.assertEqual(api.cookies_dict["modes"], "three")
         self.assertEqual(api.cookies_dict["unb"], "test")
-        mode_request = next(r for r in requests if r.url.path.endswith("verify_modes.htm"))
+        mode_request = next(
+            r for r in requests if r.url.path.endswith("verify_modes.htm")
+        )
         self.assertNotIn("_umidfg", mode_request.url.params)
         self.assertIn("normal=two", mode_request.headers["cookie"])
 
@@ -102,10 +146,15 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(success)
 
     async def test_timeout(self):
-        api = Mock()
-        api.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=PAGE)))
+        api = FishAPI({})
+        await api.client.aclose()
+        api.client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, text=PAGE)
+            )
+        )
         try:
-            with patch("myfish.adapters.fish.verification.qrcode.QRCode"):
+            with patch("myfish.adapters.fish.qrcode.QRCode"):
                 self.assertFalse(await verify_identity(api, PAGE_URL, timeout=0))
         finally:
             await api.client.aclose()
@@ -115,11 +164,18 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
         client.cookies_dict = {}
         client.qrcode_gen.return_value = {"content": "test", "t": "t", "ck": "ck"}
         client.qrcode_poll.side_effect = [
-            {"status": "ERROR", "redirect_url": PAGE_URL}, {"status": "CONFIRMED"}
+            {"status": "ERROR", "redirect_url": PAGE_URL},
+            {"status": "CONFIRMED"},
         ]
-        with patch("myfish.adapters.fish.verify_identity", new_callable=AsyncMock, return_value=True) as verify, \
-                patch("myfish.adapters.fish.asyncio.sleep", new_callable=AsyncMock), \
-                patch("myfish.adapters.fish.qrcode.QRCode"):
+        with (
+            patch(
+                "myfish.adapters.fish._verify_identity",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as verify,
+            patch("myfish.adapters.fish.asyncio.sleep", new_callable=AsyncMock),
+            patch("myfish.adapters.fish.qrcode.QRCode"),
+        ):
             await qrcode_login(client)
         verify.assert_awaited_once_with(client, PAGE_URL)
         self.assertEqual(client.qrcode_poll.await_count, 2)
@@ -138,15 +194,26 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
             {"status": "SCANED"},
             {"status": "CONFIRMED"},
         ]
-        client.get_token.return_value = {"data": {}, "ret": ["FAIL_SYS_SESSION_EXPIRED::Session过期"]}
-        with patch("myfish.adapters.fish.verify_identity", new_callable=AsyncMock, return_value=True) as verify, \
-                patch("myfish.adapters.fish.asyncio.sleep", new_callable=AsyncMock), \
-                patch("myfish.adapters.fish.qrcode.QRCode") as qr:
+        client.get_token.return_value = {
+            "data": {},
+            "ret": ["FAIL_SYS_SESSION_EXPIRED::Session过期"],
+        }
+        with (
+            patch(
+                "myfish.adapters.fish._verify_identity",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as verify,
+            patch("myfish.adapters.fish.asyncio.sleep", new_callable=AsyncMock),
+            patch("myfish.adapters.fish.qrcode.QRCode") as qr,
+        ):
             result = await qrcode_login(client)
         self.assertEqual(result["verified_cookie"], "keep")
         self.assertEqual(client.qrcode_gen.await_count, 2)
-        self.assertEqual([call.args for call in client.qrcode_poll.await_args_list],
-                         [("old-t", "old-ck"), ("new-t", "new-ck"), ("new-t", "new-ck")])
+        self.assertEqual(
+            [call.args for call in client.qrcode_poll.await_args_list],
+            [("old-t", "old-ck"), ("new-t", "new-ck"), ("new-t", "new-ck")],
+        )
         self.assertEqual(qr.return_value.print_ascii.call_count, 2)
         verify.assert_awaited_once()
 
@@ -154,7 +221,10 @@ class IdentityVerificationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             parse_verification_page("expired", PAGE_URL)
         with self.assertRaises(ValueError):
-            parse_verification_page(PAGE.replace("passport.goofish.com/iv/photo", "example.com/iv/photo"), PAGE_URL)
+            parse_verification_page(
+                PAGE.replace("passport.goofish.com/iv/photo", "example.com/iv/photo"),
+                PAGE_URL,
+            )
 
 
 if __name__ == "__main__":

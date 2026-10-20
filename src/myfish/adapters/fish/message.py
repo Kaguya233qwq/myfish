@@ -1,18 +1,23 @@
 import base64
 import json
-import re
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from typing import Any, ClassVar
+from urllib.parse import parse_qs, urlsplit
 
 from pydantic import (
     BaseModel,
     Field,
     field_validator,
-    model_serializer,
     model_validator,
 )
 
+from myfish.core.event import BaseEvent, MessageEvent
 from myfish.core.logger import logger
 from myfish.core.message import Audio, Image, MessageChain, MessageSegment, Text
+
+from .events import FishTradeEvent
+from .utils import load_message_json
 
 
 class ItemCard(MessageSegment):
@@ -34,17 +39,37 @@ class SystemTip(MessageSegment):
     tip_text: str
 
 
-class FishTradeCard(MessageSegment):
-    """闲鱼交易动态卡片 (拍下、改价、已付款等)"""
+class FishEventSegment(MessageSegment, ABC):
+    """可转换为平台事件的消息段。"""
 
-    type: str = "fish_trade_card"
-    desc: str = "交易卡片"
+    @abstractmethod
+    def to_event(self, account_id: str, body: "MessageBody") -> BaseEvent:
+        raise NotImplementedError
 
-    title: str  # 标题，如 "我已拍下，待付款"
-    content: str  # 描述，如 "请双方沟通及时确认价格"
-    order_id: str  # 订单 ID
-    button_text: str  # 按钮文字，如 "修改价格" 或 "已付款"
-    task_id: str  # 任务 ID
+
+class TradeCard(FishEventSegment):
+    """交易通知卡片（仅接收）。"""
+
+    type: str = "trade_card"
+    desc: str = "交易通知"
+    order_id: str = Field(pattern=r"^[0-9]+$")
+    title: str = ""
+    content: str = ""
+    button_text: str = ""
+    task_id: str = ""
+
+    def to_event(self, account_id: str, body: "MessageBody") -> FishTradeEvent:
+        return FishTradeEvent(
+            account_id=account_id,
+            cid=body.cid,
+            sender_id=body.sender.user_id,
+            sender_name=body.sender.name,
+            order_id=self.order_id,
+            title=self.title,
+            content=self.content,
+            button_text=self.button_text,
+            task_id=self.task_id,
+        )
 
 
 class FishPayloadNode(BaseModel):
@@ -149,67 +174,6 @@ class FishSystemTipNode(FishPayloadNode):
         }, 2
 
 
-class FishTradeCardNode(FishPayloadNode):
-    """交易动态卡片(兼容拍下和改价状态)"""
-
-    content_type = 26
-
-    title: str
-    content: str
-    order_id: str
-    button_text: str
-    task_id: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def pre_process(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "dxCard" in data:
-            main = data.get("dxCard", {}).get("item", {}).get("main", {})
-            ex = main.get("exContent", {})
-            button = ex.get("button", {})
-            args = main.get("clickParam", {}).get("args", {})
-
-            # 从 fleamarket://... 链接中提取订单号
-            target_url = main.get("targetUrl", "") or button.get("targetUrl", "")
-            order_id_match = re.search(r"(?:id|bizOrderId)=(\d+)", target_url)
-            order_id = order_id_match.group(1) if order_id_match else ""
-
-            return {
-                "title": ex.get("title", ""),
-                "content": ex.get("desc", ""),
-                "order_id": order_id,
-                "button_text": button.get("text", ""),
-                "task_id": args.get("task_id", ""),
-            }
-        return data
-
-    @classmethod
-    def decode(cls, payload: dict) -> list[MessageSegment]:
-        try:
-            # 使用 model_validate 进行解析，代替原生的解包 cls(**payload)
-            node = cls.model_validate(payload)
-            return [node.to_core()]
-        except Exception as e:
-            # 记录错误日志，防止严重漏单而无处排查
-            logger.error(
-                f"[FishTradeCardNode] 交易动态卡片解析失败: {e} | 数据: {payload}"
-            )
-            return []
-
-    def to_core(self) -> FishTradeCard:
-        return FishTradeCard(
-            title=self.title,
-            content=self.content,
-            order_id=self.order_id,
-            button_text=self.button_text,
-            task_id=self.task_id,
-        )
-
-    @model_serializer
-    def serialize(self):
-        raise NotImplementedError("FishTradeCard 是只读的，不允许发送")
-
-
 class FishCustomNode(FishPayloadNode):
     """闲鱼的富媒体/多消息段混合容器"""
 
@@ -218,17 +182,22 @@ class FishCustomNode(FishPayloadNode):
     @classmethod
     def decode(cls, payload: dict) -> list[MessageSegment]:
         segments = []
-        custom_data_b64 = payload.get("custom", {}).get("data", "")
-        if custom_data_b64:
-            try:
-                custom_str = base64.b64decode(custom_data_b64).decode("utf-8")
-                for item in json.loads(custom_str):
+        decoded = load_message_json(payload.get("custom", {}).get("data"))
+        if isinstance(decoded, dict):
+            decoded = [decoded]
+        if isinstance(decoded, list):
+            for item in decoded:
+                if not isinstance(item, dict):
+                    continue
+                try:
                     if item.get("type") == "text":
                         segments.append(Text(**item))
                     elif item.get("type") == "image":
                         segments.append(Image(**item))
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"解析自定义富文本消息失败: {e}")
+                    else:
+                        segments.extend(Content.model_validate(item).to_message_chain())
+                except (ValueError, TypeError, AttributeError) as exc:
+                    logger.warning("自定义消息段解析失败: {}", type(exc).__name__)
         return segments
 
     @classmethod
@@ -277,6 +246,37 @@ class FishItemCardNode(FishPayloadNode):
         ]
 
 
+class FishTradeNode(FishPayloadNode):
+    content_type = 26
+
+    @classmethod
+    def decode(cls, payload: dict) -> list[MessageSegment]:
+        if "dxCard" not in payload:
+            return [TradeCard.model_validate(payload)]
+        main = payload.get("dxCard", {}).get("item", {}).get("main", {})
+        content = main.get("exContent", {})
+        button = content.get("button", {})
+        args = main.get("clickParam", {}).get("args", {})
+        order_ids = set()
+        for target in (main.get("targetUrl"), button.get("targetUrl")):
+            if not isinstance(target, str):
+                continue
+            query = parse_qs(urlsplit(target).query, keep_blank_values=True)
+            for key in ("bizOrderId", "id"):
+                order_ids.update(query.get(key, []))
+        if len(order_ids) != 1:
+            raise ValueError("交易通知缺少唯一订单号")
+        return [
+            TradeCard(
+                order_id=order_ids.pop(),
+                title=content.get("title", ""),
+                content=content.get("desc", ""),
+                button_text=button.get("text", ""),
+                task_id=args.get("task_id", ""),
+            )
+        ]
+
+
 class Content(BaseModel):
     """收消息时的总路由"""
 
@@ -287,7 +287,10 @@ class Content(BaseModel):
         msg_chain = MessageChain()
         node_class = FishPayloadNode._registry.get(self.content_type)
         if node_class:
-            msg_chain.extend(node_class.decode(self.model_dump(by_alias=True)))
+            try:
+                msg_chain.extend(node_class.decode(self.model_dump(by_alias=True)))
+            except (ValueError, TypeError, AttributeError) as exc:
+                logger.warning("消息段解析失败: {}", type(exc).__name__)
         return msg_chain
 
 
@@ -296,12 +299,50 @@ class Sender(BaseModel):
     user_id: str = Field(alias="senderUserId", default="")
     raw_text: str = Field(alias="reminderContent", default="")
 
+    @field_validator("user_id", mode="before")
+    @classmethod
+    def normalize_id(cls, value: Any) -> str:
+        return str(value).split("@", 1)[0] if value is not None else ""
+
 
 class MessageBody(BaseModel):
     cid_raw: str = Field(alias="2", default="")
     timestamp: int = Field(alias="5", default=0)
     sender: Sender = Field(alias="10", default_factory=Sender)
     content: Content = Field(alias="6", default_factory=Content)
+
+    def to_events(self, account_id: str, raw_payload: dict) -> Iterator[BaseEvent]:
+        messages = MessageChain()
+        events: list[BaseEvent] = []
+        for segment in self.content.to_message_chain():
+            if isinstance(segment, FishEventSegment):
+                events.append(segment.to_event(account_id, self))
+            else:
+                messages.append(segment)
+        if messages:
+            yield MessageEvent(
+                cid=self.cid,
+                sender_id=self.sender.user_id,
+                sender_name=self.sender.name,
+                messages=messages,
+                raw_payload=raw_payload,
+            )
+        yield from events
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_sender(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        sender = value.get("10")
+        sender = dict(sender) if isinstance(sender, dict) else {}
+        identity = value.get("1")
+        if not sender.get("senderUserId") and isinstance(identity, dict):
+            sender["senderUserId"] = identity.get("1", "")
+        sender["reminderTitle"] = (
+            sender.get("senderNick") or sender.get("reminderTitle") or ""
+        )
+        return {**value, "10": sender}
 
     @property
     def cid(self) -> str:
@@ -311,12 +352,14 @@ class MessageBody(BaseModel):
     @classmethod
     def extract_content(cls, v: Any) -> Any:
         if isinstance(v, dict):
-            try:
-                inner_payload = v.get("3", {}).get("5")
-                if isinstance(inner_payload, str):
-                    return json.loads(inner_payload)
-            except Exception:  # noqa: BLE001, S110
-                pass
+            custom = v.get("3")
+            candidates = [v]
+            if isinstance(custom, dict):
+                candidates.extend([custom.get("5"), custom.get("1")])  # pyright: ignore[reportArgumentType]
+            for candidate in candidates:
+                decoded = load_message_json(candidate)
+                if isinstance(decoded, dict) and "contentType" in decoded:
+                    return decoded
         return v if isinstance(v, dict) else {}
 
 
@@ -329,8 +372,6 @@ _ENCODE_MAP = {
     Image: FishImageNode,
     Audio: FishAudioNode,
     SystemTip: FishSystemTipNode,
-    FishTradeCard: FishTradeCardNode,
-    ItemCard: FishItemCardNode,
     MessageChain: FishCustomNode,
 }
 
@@ -338,6 +379,10 @@ _ENCODE_MAP = {
 def auto_encode(message: MessageSegment | MessageChain) -> tuple[dict, int]:
     """发消息时的总路由 (被 adapter.send 调用)"""
 
+    if isinstance(message, MessageChain):
+        for segment in message:
+            if type(segment) not in _ENCODE_MAP:
+                raise ValueError(f"闲鱼适配器不支持发送类型: {type(segment).__name__}")
     node_class = _ENCODE_MAP.get(type(message))
 
     if node_class and hasattr(node_class, "encode"):

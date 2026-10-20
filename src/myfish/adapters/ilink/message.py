@@ -144,7 +144,7 @@ class ILinkMessage(BaseModel):
             if node_class:
                 try:
                     chain.extend(node_class.decode(item))
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"解析 iLink 消息节点失败 (type={item_type}): {e}")
         return chain
 
@@ -213,7 +213,7 @@ class ILinkVideoNode(ILinkPayloadNode):
                 )
                 video_item["thumb_cdn_url"] = thumb_info["cdn_url"]
                 video_item["thumb_aes_key"] = thumb_info["aes_key"]
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(f"[ILink] 视频封面上传失败，将发送无封面视频: {e}")
 
         return {"type": 5, "video_item": video_item}

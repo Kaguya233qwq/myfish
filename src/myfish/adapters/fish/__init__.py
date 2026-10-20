@@ -1,31 +1,506 @@
 import asyncio
 import base64
 import json
-import math
+import re
 import sys
 import time
 import urllib.parse
 
+import httpx
 import qrcode
 import qrcode.constants
 import websockets
 from loguru import logger
+from websockets.frames import Close
+
 from myfish.core.adapter import AdapterMetaData, BaseAdapter, OnReceiveCallback
 from myfish.core.bot import Bot
+from myfish.core.event import MessageEvent
 from myfish.core.message import (
     MessageChain,
     MessageSegment,
 )
 from myfish.core.registry import AdapterRegistry
 
-from .api import FishAPI
-from .message import FishTradeCard, auto_encode
+from .api import (
+    FishAPI,
+    FishAPIError,
+    FishMessageUnconfirmed,
+    FishWSRejected,
+    token_from_response,
+)
+from .message import (
+    RecievedMessagePayload,
+    auto_encode,
+)
 from .sign import decrypt, generate_mid, generate_uuid
-from .tracking import OrderTracker
-from .utils import load_local_auth, rm_local_auth
-from .verification import verify_identity
+from .utils import (
+    load_local_auth,
+    load_message_json,
+    parse_verification_page,
+    passport_url,
+    rm_local_auth,
+)
 
 FishBot = Bot["FishAdapter"]
+
+_TOKEN_REFRESH_INTERVAL = 600
+_WS_REQUEST_TIMEOUT = 15
+_RECONNECT_INTERVAL = 3
+
+
+@AdapterRegistry.register
+class FishAdapter(BaseAdapter["FishAPI"]):
+    """闲鱼适配器"""
+
+    meta_data = AdapterMetaData(
+        id="fish",
+        name="闲鱼适配器",
+        description="闲鱼Web端的WebSocket连接实现",
+        version="1.0.0",
+        author="Kaguya233qwq",
+    )
+
+    def __init__(self, api: FishAPI):
+        self.base_url = "wss://wss-goofish.dingtalk.com/"
+        super().__init__(api)
+
+        self._active_ws: websockets.ClientConnection | None = None
+        self._on_receive_callback: OnReceiveCallback | None = None
+        self._pending_requests: dict[str, asyncio.Future[dict]] = {}
+        self._ws_token = ""
+        self._token_refresh_stage = "waiting"
+        self._ws_reconnect_reason = "connection_closed"
+        self.api.bind_websocket(self._request_ws)
+
+    @classmethod
+    def setup(cls, **kwargs) -> "FishAdapter":
+        cookies = kwargs.get("cookies")
+        if not cookies:
+            cookies = load_local_auth()
+        api_instance = FishAPI(cookies=cookies)
+
+        return cls(api=api_instance)
+
+    def _get_headers(self) -> dict:
+        cookie_str = "; ".join([f"{k}={v}" for k, v in self.api.cookies_dict.items()])
+
+        return {
+            "Cookie": cookie_str,
+            "Host": "wss-goofish.dingtalk.com",
+            "Connection": "Upgrade",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/133.0.0.0 Safari/537.36",
+            "Origin": "https://www.goofish.com",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        }
+
+    async def _send_ack(self, message: dict):
+        if not self._active_ws or "code" in message:
+            return
+        req_headers = message.get("headers", {})
+        ack = {
+            "code": 200,
+            "headers": {
+                "mid": req_headers.get("mid", await generate_mid()),
+                "sid": req_headers.get("sid", ""),
+            },
+        }
+        for key in ["app-key", "ua", "dt"]:
+            if key in req_headers:
+                ack["headers"][key] = req_headers[key]
+        try:
+            await self._active_ws.send(json.dumps(ack))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"ACK 发送失败: {e}")
+
+    async def _wait_ws_response(self, mid: str) -> bool:
+        async with asyncio.timeout(_WS_REQUEST_TIMEOUT):
+            while self._active_ws:
+                raw = await self._active_ws.recv()
+                response = load_message_json(raw)
+                if not isinstance(response, dict):
+                    continue
+                if response.get("headers", {}).get("mid") == mid:
+                    code = response.get("code")
+                    if code != 200:
+                        logger.warning(
+                            "[FishWSAdapter] 初始化请求被拒绝: code={}", code
+                        )
+                    return code == 200
+                await self._handle_raw_message(raw)
+        return False
+
+    async def _request_ws(
+        self, path: str, body: list | None, *, headers: dict | None = None
+    ) -> dict:
+        ws = self._active_ws
+        if not ws:
+            raise FishAPIError("WebSocket 未连接")
+        mid = await generate_mid()
+        future = asyncio.get_running_loop().create_future()
+        self._pending_requests[mid] = future
+        try:
+            request: dict[str, object] = {
+                "lwp": path,
+                "headers": {**(headers or {}), "mid": mid},
+            }
+            if body is not None:
+                request["body"] = body
+            async with asyncio.timeout(_WS_REQUEST_TIMEOUT):
+                await ws.send(json.dumps(request))
+                response = await future
+            if response.get("code") != 200:
+                logger.warning(
+                    "[FishWSAdapter] WebSocket 请求被拒绝: path={} code={}",
+                    path,
+                    response.get("code")
+                    if isinstance(response.get("code"), int)
+                    else "unknown",
+                )
+                raise FishWSRejected("平台拒绝 WebSocket 请求")
+            return response
+        finally:
+            self._pending_requests.pop(mid, None)
+            if not future.done():
+                future.cancel()
+
+    def _registration_headers(self, token: str) -> dict[str, str]:
+        return {
+            "cache-header": "app-key token ua wv",
+            "app-key": "444e9908a51d1cb236a27862abc769c9",
+            "token": token,
+            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 DingTalk(2.1.5) OS(Windows/10) Browser(Chrome/133.0.0.0) DingWeb/2.1.5 IMPaaS DingWeb/2.1.5",
+            "dt": "j",
+            "wv": "im:3,au:3,sy:6",
+            "sync": "0,0;0;0;",
+            "did": self.api.device_id,
+        }
+
+    async def _init_connection(self):
+        if not self._active_ws:
+            return
+        token = await self.api.get_access_token()
+        if not token:
+            logger.error("[FishWSAdapter] 适配器初始化失败：无法获取 accessToken")
+            return False
+
+        self._ws_token = token
+
+        reg_msg = {
+            "lwp": "/reg",
+            "headers": {
+                **self._registration_headers(token),
+                "mid": await generate_mid(),
+            },
+        }
+        await self._active_ws.send(json.dumps(reg_msg))
+        if not await self._wait_ws_response(reg_msg["headers"]["mid"]):
+            return False
+        current_time = int(time.time() * 1000)
+
+        sync_msg = {
+            "lwp": "/r/SyncStatus/ackDiff",
+            "headers": {"mid": await generate_mid()},
+            "body": [
+                {
+                    "pipeline": "sync",
+                    "tooLong2Tag": "PNM,1",
+                    "channel": "sync",
+                    "topic": "sync",
+                    "highPts": 0,
+                    "pts": current_time * 1000,
+                    "seq": 0,
+                    "timestamp": current_time,
+                }
+            ],
+        }
+        await self._active_ws.send(json.dumps(sync_msg))
+        if not await self._wait_ws_response(sync_msg["headers"]["mid"]):
+            return False
+        logger.success("[FishWSAdapter] WebSocket 连接成功~ 正在持续监听闲鱼消息...")
+        return True
+
+    async def _heart_beat_loop(self):
+        ws = self._active_ws
+        if not ws:
+            return
+        try:
+            while self._active_ws is ws:
+                await ws.send(
+                    json.dumps({"lwp": "/!", "headers": {"mid": await generate_mid()}})
+                )
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[FishWSAdapter] 心跳发送失败: {}", type(exc).__name__)
+            if self._active_ws is ws:
+                self._ws_reconnect_reason = "heartbeat_failure"
+                await ws.close()
+
+    async def _keep_token_alive_loop(self):
+        """刷新登录凭证；WebSocket 在建立连接时注册。"""
+        try:
+            while True:
+                await asyncio.sleep(_TOKEN_REFRESH_INTERVAL)
+                ws = self._active_ws
+                if ws is None:
+                    return
+                started = time.monotonic()
+                self._token_refresh_stage = "fetch_token"
+                logger.info("[FishWSAdapter] 开始刷新登录凭证")
+                try:
+                    token = await self.api.get_access_token()
+                    if not token:
+                        raise FishAPIError("Token 刷新未返回有效凭证")
+                    if self._active_ws is not ws:
+                        return
+                    self._token_refresh_stage = "waiting"
+                    logger.info(
+                        "[FishWSAdapter] 登录凭证刷新成功: elapsed={:.2f}s",
+                        time.monotonic() - started,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "[FishWSAdapter] 登录凭证刷新失败: stage={} error={} elapsed={:.2f}s，将重新建立连接",
+                        self._token_refresh_stage,
+                        type(exc).__name__,
+                        time.monotonic() - started,
+                    )
+                    if self._active_ws is ws:
+                        self._ws_reconnect_reason = "auth_refresh_failure"
+                        await ws.close()
+                    return
+        except asyncio.CancelledError:
+            pass
+
+    async def send(
+        self,
+        target_id: str,
+        message: MessageSegment | MessageChain,
+        cid: str = "",
+        *,
+        redact: bool = False,
+    ):
+        """等待平台确认发送；明确拒绝时返回 False，结果未知时抛出 FishMessageUnconfirmed。"""
+        if not self._active_ws:
+            logger.error("[FishWSAdapter] Adapter 未连接，无法发送消息")
+            return False
+
+        try:
+            payload, custom_type = auto_encode(message)
+        except ValueError as e:
+            logger.error(f"[FishWSAdapter] 拦截非法发送: {e}")
+            return False
+
+        encoded_data = base64.b64encode(json.dumps(payload).encode("utf-8")).decode(
+            "utf-8"
+        )
+        _cid = cid if cid else target_id
+
+        msg = {
+            "lwp": "/r/MessageSend/sendByReceiverScope",
+            "body": [
+                {
+                    "uuid": generate_uuid(),
+                    "cid": f"{_cid}@goofish",
+                    "conversationType": 1,
+                    "content": {
+                        "contentType": 101,
+                        "custom": {"type": custom_type, "data": encoded_data},
+                    },
+                    "redPointPolicy": 0,
+                    "extension": {"extJson": "{}"},
+                    "ctx": {"appVersion": "1.0", "platform": "web"},
+                    "mtags": {},
+                    "msgReadStatusSetting": 1,
+                },
+                {"actualReceivers": [f"{target_id}@goofish", f"{self.bot_id}@goofish"]},
+            ],
+        }
+
+        log_text = "[敏感交付内容已隐藏]" if redact else message.summary
+        try:
+            await self._request_ws(msg["lwp"], msg["body"])
+        except FishWSRejected:
+            logger.warning("[FishWSAdapter] 平台拒绝发送消息")
+            return False
+        except (FishAPIError, TimeoutError, websockets.ConnectionClosed) as exc:
+            raise FishMessageUnconfirmed("消息发送结果未确认，请核对会话记录") from exc
+        logger.success(f"[发送] -> {target_id}: {log_text}")
+        return True
+
+    async def _handle_raw_message(self, message_str: str | bytes):
+        message_dict = load_message_json(message_str)
+        if not isinstance(message_dict, dict):
+            logger.warning("[FishWSAdapter] 收到无法解析的 WebSocket 帧")
+            return
+        headers = message_dict.get("headers")
+        if "code" in message_dict and isinstance(headers, dict):
+            mid = headers.get("mid")
+            pending = self._pending_requests.get(mid) if isinstance(mid, str) else None
+            if pending and not pending.done():
+                pending.set_result(message_dict)
+                return
+        await self._send_ack(message_dict)
+        body = message_dict.get("body")
+        if not isinstance(body, dict):
+            return
+        push_package = body.get("syncPushPackage")
+        if not isinstance(push_package, dict):
+            return
+        data_list = push_package.get("data")
+        if not isinstance(data_list, list):
+            return
+        for item in data_list:
+            try:
+                if not isinstance(item, dict):
+                    continue
+                raw_data = item.get("data")
+                if not raw_data:
+                    continue
+
+                parsed_dict = load_message_json(raw_data)
+                if parsed_dict is None and isinstance(raw_data, str):
+                    parsed_dict = load_message_json(decrypt(raw_data))
+                if not isinstance(parsed_dict, dict) or not isinstance(
+                    parsed_dict.get("1"), dict
+                ):
+                    continue
+
+                from pydantic import ValidationError
+
+                try:
+                    incoming_msg = RecievedMessagePayload.model_validate(parsed_dict)
+                except ValidationError as exc:
+                    fields = [
+                        ".".join(map(str, error["loc"])) for error in exc.errors()
+                    ]
+                    logger.warning(
+                        "[FishWSAdapter] 消息字段不兼容: {}", ",".join(fields)
+                    )
+                    continue
+
+                sender = incoming_msg.data.sender
+                if not sender.user_id or str(sender.user_id) == str(self.bot_id):
+                    continue
+
+                for event in incoming_msg.data.to_events(self.bot_id, parsed_dict):
+                    if isinstance(event, MessageEvent):
+                        logger.success(
+                            f"[接收] <- {event.sender_name}({event.sender_id}): {event.summary}"
+                        )
+                    else:
+                        logger.info("[接收事件] {}", event.event_type)
+                    if self._on_receive_callback:
+                        await self._on_receive_callback(event)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[FishWSAdapter] 单条消息处理失败: {}", type(exc).__name__
+                )
+
+    def _safe_close_reason(self, reason: str) -> str:
+        if not isinstance(reason, str):
+            return ""
+        cookies = getattr(self.api, "cookies_dict", {})
+        secrets = [self._ws_token]
+        if isinstance(cookies, dict):
+            secrets.extend(
+                value for value in cookies.values() if isinstance(value, str)
+            )
+        for secret in sorted(filter(None, secrets), key=len, reverse=True):
+            reason = reason.replace(secret, "[redacted]")
+        return reason.replace("\r", " ").replace("\n", " ")[:160]
+
+    def _log_ws_disconnect(
+        self,
+        ws: websockets.ClientConnection | None,
+        started: float,
+        exc: websockets.ConnectionClosed | None = None,
+    ) -> None:
+        protocol = getattr(ws, "protocol", None)
+        received = exc.rcvd if exc else getattr(protocol, "close_rcvd", None)
+        sent = exc.sent if exc else getattr(protocol, "close_sent", None)
+        received = received if isinstance(received, Close) else None
+        sent = sent if isinstance(sent, Close) else None
+        logger.warning(
+            "[FishWSAdapter] WebSocket断开: close_code={} received_code={} sent_code={} reason={} "
+            "uptime={:.2f}s refresh_stage={} reconnect_reason={}，3秒后重连",
+            getattr(ws, "close_code", None),
+            received.code if received else None,
+            sent.code if sent else None,
+            self._safe_close_reason(
+                received.reason
+                if received
+                else sent.reason
+                if sent
+                else getattr(ws, "close_reason", "") or ""
+            ),
+            time.monotonic() - started,
+            self._token_refresh_stage,
+            self._ws_reconnect_reason,
+        )
+
+    async def _connect_ws(self):
+        while True:
+            heartbeat = None
+            token_refresh = None
+            ws = None
+            started = time.monotonic()
+            self._token_refresh_stage = "waiting"
+            self._ws_reconnect_reason = "connection_closed"
+            try:
+                logger.info("[FishWSAdapter] 尝试连接 WebSocket 服务器...")
+                async with websockets.connect(
+                    self.base_url, additional_headers=self._get_headers()
+                ) as ws:
+                    self._active_ws = ws
+                    started = time.monotonic()
+                    if not await self._init_connection():
+                        raise ConnectionError("WebSocket 注册或同步失败")
+                    heartbeat = asyncio.create_task(self._heart_beat_loop())
+                    token_refresh = asyncio.create_task(self._keep_token_alive_loop())
+
+                    async for message_str in ws:
+                        await self._handle_raw_message(message_str)
+                self._log_ws_disconnect(ws, started)
+            except websockets.ConnectionClosed as exc:
+                self._log_ws_disconnect(ws, started, exc)
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "[FishWSAdapter] 连接异常: error={} reason={}",
+                    type(e).__name__,
+                    self._safe_close_reason(str(e)),
+                )
+            finally:
+                self._active_ws = None
+                for future in self._pending_requests.values():
+                    if not future.done():
+                        future.set_exception(FishAPIError("WebSocket 连接已断开"))
+                self._pending_requests.clear()
+                background = [task for task in (heartbeat, token_refresh) if task]
+                for task in background:
+                    task.cancel()
+                if background:
+                    await asyncio.gather(*background, return_exceptions=True)
+                self._ws_token = ""
+            await asyncio.sleep(_RECONNECT_INTERVAL)
+
+    async def run(self):
+        """启动 Driver"""
+        try:
+            valid_cookies = await _ensure_auth(self.api)
+            if not valid_cookies or not valid_cookies.get("unb"):
+                logger.error("闲鱼登录未完成，停止启动适配器。")
+                return
+            self.bot_id = valid_cookies.get("unb", "")
+            await self._connect_ws()
+        finally:
+            self._active_ws = None
+            await self.api.close()
 
 
 async def qrcode_login(client: FishAPI):
@@ -85,11 +560,11 @@ async def qrcode_login(client: FishAPI):
             if isinstance(redirect_url, str) and redirect_url:
                 if not verification_attempted:
                     verification_attempted = True
-                    if await verify_identity(client, redirect_url):
+                    if await _verify_identity(client, redirect_url):
                         deadline = time.monotonic() + 120
                         if client.cookies_dict.get("unb"):
                             token = await client.get_token()
-                            if token.get("data", {}).get("accessToken"):
+                            if token_from_response(token):
                                 return client.cookies_dict
                             client.client.headers.pop("cookie", None)
                         logger.info(
@@ -125,7 +600,7 @@ async def qrcode_login(client: FishAPI):
             return None
 
 
-async def ensure_auth(client: FishAPI):
+async def _ensure_auth(client: FishAPI):
     """
     核心鉴权流：优先读取 -> 验证状态 -> 按需扫码 -> 返回可用凭证
     """
@@ -133,383 +608,129 @@ async def ensure_auth(client: FishAPI):
     if cookies and "unb" in cookies:
         logger.info("正在验证本地凭证有效性...")
 
-        res = await client.get_token()
-        if isinstance(res, dict) and "FAIL_SYS_USER_VALIDATE" in str(res):
-            punish_url = res.get("data", {}).get("url", "")
-            logger.error("🚨 触发阿里风控滑块验证，请勿再次重启脚本")
-            logger.error(
-                "请手动完成滑块验证码验证，并将x5sec的值添加到myfish_auth.json"
+        for _ in range(2):
+            res = await client.get_token()
+            ret = res.get("ret", [])
+            codes = (
+                {str(code).split("::", 1)[0] for code in ret}
+                if isinstance(ret, list)
+                else set()
             )
-            logger.error(punish_url)
-            await client.close()
-            sys.exit(1)
-        if isinstance(res, dict) and "FAIL_SYS_SESSION_EXPIRED" in str(res):
-            logger.warning("会话已过期，需要重新登陆")
-            # 删除过期凭证
-            client.cookies_dict = {}
-            rm_local_auth()
-        else:
-            if res.get("data", {}).get("accessToken"):
-                unb = cookies["unb"]
-                nick = urllib.parse.unquote(cookies["tracknick"])
-                logger.success(f"成功登录账号 {nick}({unb})")
+            if "FAIL_SYS_USER_VALIDATE" in codes:
+                logger.error(
+                    "登录触发安全验证，请在浏览器完成验证并更新闲鱼适配器 auth.json 中的 x5sec"
+                )
+                return None
+            if "FAIL_SYS_SESSION_EXPIRED" in codes:
+                logger.warning("会话已过期，需要重新登录")
+                client.cookies_dict = {}
+                client.client.cookies.clear()
+                rm_local_auth()
+                break
+            if token_from_response(res):
+                cookies = client.cookies_dict
+                nick = urllib.parse.unquote(cookies.get("tracknick", ""))
+                logger.success("成功登录账号 {}({})", nick, cookies["unb"])
                 return cookies
-            else:
-                logger.warning("Token 失效，尝试自动刷新")
-                refresh_res = await client.get_token()
-                if refresh_res:
-                    logger.success("自动刷新 Token 成功")
-                    return cookies
-                else:
-                    logger.warning("自动刷新 Token 失败，可能需要重新登录")
+            logger.warning("未获得有效 Token")
+        else:
+            logger.error("鉴权失败，停止启动闲鱼适配器，请检查登录状态")
+            return None
 
     # 如果没有有效凭证，执行扫码登录流程
     return await qrcode_login(client)
 
 
-@AdapterRegistry.register
-class FishAdapter(BaseAdapter["FishAPI"]):
-    """闲鱼适配器"""
-
-    meta_data = AdapterMetaData(
-        id="fish",
-        name="闲鱼适配器",
-        description="闲鱼Web端的WebSocket连接实现",
-        version="1.0.0",
-        author="Kaguya233qwq",
-    )
-
-    def __init__(
-        self,
-        api: FishAPI,
-        *,
-        track_orders: bool = False,
-        order_poll_interval: float = 60,
-        order_max_pages: int = 5,
-    ):
-        if not isinstance(track_orders, bool):
-            raise TypeError("track_orders 必须是布尔值")
-        if not math.isfinite(order_poll_interval) or order_poll_interval < 10:
-            raise ValueError("order_poll_interval 必须是至少 10 秒的有限数值")
-        if (
-            isinstance(order_max_pages, bool)
-            or not isinstance(order_max_pages, int)
-            or not 1 <= order_max_pages <= 100
-        ):
-            raise ValueError("order_max_pages 必须在 1 到 100 之间")
-        self.base_url = "wss://wss-goofish.dingtalk.com/"
-        super().__init__(api)
-
-        self._active_ws: websockets.ClientConnection | None = None
-        self._bg_tasks = []
-        self._on_receive_callback: OnReceiveCallback | None = None
-        self.track_orders = track_orders
-        self.order_poll_interval = order_poll_interval
-        self.order_max_pages = order_max_pages
-        self.order_tracker: OrderTracker | None = None
-
-    @classmethod
-    def setup(cls, **kwargs) -> "FishAdapter":
-        cookies = kwargs.get("cookies")
-        if not cookies:
-            cookies = load_local_auth()
-        api_instance = FishAPI(cookies=cookies)
-
-        return cls(
-            api=api_instance,
-            track_orders=kwargs.get("track_orders", False),
-            order_poll_interval=kwargs.get("order_poll_interval", 60),
-            order_max_pages=kwargs.get("order_max_pages", 5),
+async def _verify_identity(
+    api: FishAPI, page_url: str, *, timeout: float = 480
+) -> bool:
+    """由本人扫码完成验证；沿用登录客户端并接收成功回跳的 Cookie。"""
+    stage = "验证入口"
+    try:
+        page_url = passport_url(page_url, page_url)
+        for _ in range(4):
+            response = await api.get_identity_page(page_url)
+            page_url = passport_url(str(response.url), page_url)
+            if urllib.parse.urlsplit(page_url).path == "/iv/static/mini_expired.htm":
+                logger.warning(
+                    "身份验证入口票据已过期，请重新扫码登录以获取新的验证二维码。"
+                )
+                return False
+            if urllib.parse.urlsplit(page_url).path != "/iv/mini/normal_validate.htm":
+                break
+            stage = "验证方式跳转"
+            # 使用脚本跳转
+            target = re.search(
+                r"""window\.location\.href\s*=\s*['"]([^'"]*/iv/mini/verify_modes\.htm[^'"]*)['"]""",
+                response.text,
+            )
+            if not target:
+                raise ValueError("验证入口未提供验证方式地址")
+            next_url = urllib.parse.urlsplit(passport_url(target.group(1), page_url))
+            query = [
+                (k, v)
+                for k, v in urllib.parse.parse_qsl(
+                    next_url.query, keep_blank_values=True
+                )
+                if k != "_umidfg"
+            ]
+            page_url = urllib.parse.urlunsplit(
+                next_url._replace(query=urllib.parse.urlencode(query))
+            )
+            logger.info("已进入登录安全验证，正在获取身份验证二维码…")
+        else:
+            raise ValueError("验证入口跳转次数过多")
+        stage = "二维码页面解析"
+        content, poll_url = parse_verification_page(response.text, page_url)
+        qr = qrcode.QRCode(border=2)
+        qr.add_data(content)
+        qr.make(fit=True)
+        logger.warning(
+            "请使用闲鱼 App 扫描下方身份验证二维码，按手机提示完成本人验证。"
         )
-
-    def _get_headers(self) -> dict:
-        cookie_str = "; ".join([f"{k}={v}" for k, v in self.api.cookies_dict.items()])
-
-        return {
-            "Cookie": cookie_str,
-            "Host": "wss-goofish.dingtalk.com",
-            "Connection": "Upgrade",
-            "Pragma": "no-cache",
-            "Cache-Control": "no-cache",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/133.0.0.0 Safari/537.36",
-            "Origin": "https://www.goofish.com",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-        }
-
-    async def _send_ack(self, message: dict):
-        if not self._active_ws:
-            return
-        req_headers = message.get("headers", {})
-        ack = {
-            "code": 200,
-            "headers": {
-                "mid": req_headers.get("mid", await generate_mid()),
-                "sid": req_headers.get("sid", ""),
-            },
-        }
-        for key in ["app-key", "ua", "dt"]:
-            if key in req_headers:
-                ack["headers"][key] = req_headers[key]
-        try:
-            await self._active_ws.send(json.dumps(ack))
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"ACK 发送失败: {e}")
-
-    async def _init_connection(self):
-        if not self._active_ws:
-            return
-        token = await self.api.get_access_token()
-        if not token:
-            logger.error("[FishWSAdapter] 适配器初始化失败：无法获取 accessToken")
-            return False
-
-        reg_msg = {
-            "lwp": "/reg",
-            "headers": {
-                "cache-header": "app-key token ua wv",
-                "app-key": "444e9908a51d1cb236a27862abc769c9",
-                "token": token,
-                "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 DingTalk(2.1.5) OS(Windows/10) Browser(Chrome/133.0.0.0) DingWeb/2.1.5 IMPaaS DingWeb/2.1.5",
-                "dt": "j",
-                "wv": "im:3,au:3,sy:6",
-                "sync": "0,0;0;0;",
-                "did": self.api.device_id,
-                "mid": await generate_mid(),
-            },
-        }
-        await self._active_ws.send(json.dumps(reg_msg))
-        current_time = int(time.time() * 1000)
-
-        sync_msg = {
-            "lwp": "/r/SyncStatus/ackDiff",
-            "headers": {"mid": await generate_mid()},
-            "body": [
-                {
-                    "pipeline": "sync",
-                    "tooLong2Tag": "PNM,1",
-                    "channel": "sync",
-                    "topic": "sync",
-                    "highPts": 0,
-                    "pts": current_time * 1000,
-                    "seq": 0,
-                    "timestamp": current_time,
+        qr.print_ascii(invert=True)
+        deadline = time.monotonic() + timeout
+        previous_code = None
+        stage = "验证状态轮询"
+        while time.monotonic() < deadline:
+            await asyncio.sleep(min(2, max(0, deadline - time.monotonic())))
+            if time.monotonic() >= deadline:
+                break
+            result = await api.get_identity_status(poll_url, page_url)
+            if result.get("hasError"):
+                raise ValueError("身份验证接口返回错误，票据可能已过期")
+            data = result.get("content", {})
+            code = str(data.get("code", ""))
+            if code != previous_code:
+                messages = {
+                    "0": "等待扫码验证…",
+                    "1": "请在手机上完成验证…",
+                    "2": "身份验证审核中…",
                 }
-            ],
-        }
-        await self._active_ws.send(json.dumps(sync_msg))
-        logger.success("[FishWSAdapter] WebSocket 连接成功~ 正在持续监听闲鱼消息...")
-        return True
+                if code in messages:
+                    logger.info(messages[code])
+                previous_code = code
+            if code == "3":
+                callback = data.get("url")
+                if not isinstance(callback, str) or not callback:
+                    raise ValueError("验证成功但未返回登录回跳地址")
+                callback = passport_url(callback, page_url)
+                stage = "验证成功回跳"
 
-    async def _heart_beat_loop(self):
-        if not self._active_ws:
-            return
-        try:
-            while True:
-                await self._active_ws.send(
-                    json.dumps({"lwp": "/!", "headers": {"mid": await generate_mid()}})
-                )
-                await asyncio.sleep(15)
-        except asyncio.CancelledError:
-            pass
-
-    async def _keep_token_alive_loop(self):
-        try:
-            while True:
-                await asyncio.sleep(600)
-                try:
-                    await self.api.get_access_token()
-                except Exception:  # noqa: BLE001, S110
-                    pass
-        except asyncio.CancelledError:
-            pass
-
-    async def send(
-        self,
-        target_id: str,
-        message: MessageSegment | MessageChain,
-        cid: str = "",
-    ):
-        """将Message对象打包成底层WebSocket消息格式并发送"""
-        if not self._active_ws:
-            logger.error("[FishWSAdapter] Adapter 未连接，无法发送消息")
-            return
-
-        try:
-            payload, custom_type = auto_encode(message)
-        except ValueError as e:
-            logger.error(f"[FishWSAdapter] 拦截非法发送: {e}")
-            return
-
-        encoded_data = base64.b64encode(json.dumps(payload).encode("utf-8")).decode(
-            "utf-8"
+                await api.get_identity_page(callback)
+                logger.success("身份验证通过，继续确认登录状态。")
+                return True
+            if code == "-1":
+                logger.error("身份验证未通过，请重新登录后重试。")
+                return False
+            if code not in {"0", "1", "2"}:
+                raise ValueError("身份验证返回未知状态，请在浏览器中完成验证")
+        logger.warning("身份验证二维码已超时，请重新登录。")
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+        # HTTP 异常字符串包含 htoken，不能直接输出异常或响应正文
+        logger.warning(
+            "终端身份验证未完成，阶段={}，错误类型={}。请在浏览器中完成验证。",
+            stage,
+            type(exc).__name__,
         )
-        _cid = cid if cid else target_id
-
-        msg = {
-            "lwp": "/r/MessageSend/sendByReceiverScope",
-            "headers": {"mid": await generate_mid()},
-            "body": [
-                {
-                    "uuid": generate_uuid(),
-                    "cid": f"{_cid}@goofish",
-                    "conversationType": 1,
-                    "content": {
-                        "contentType": 101,
-                        "custom": {"type": custom_type, "data": encoded_data},
-                    },
-                    "redPointPolicy": 0,
-                    "extension": {"extJson": "{}"},
-                    "ctx": {"appVersion": "1.0", "platform": "web"},
-                    "mtags": {},
-                    "msgReadStatusSetting": 1,
-                },
-                {"actualReceivers": [f"{target_id}@goofish", f"{self.bot_id}@goofish"]},
-            ],
-        }
-
-        log_text = message.summary
-        logger.success(f"[发送] -> {target_id}: {log_text}")
-
-        await self._active_ws.send(json.dumps(msg))
-
-    async def _handle_raw_message(self, message_str: str):
-        message_dict = json.loads(message_str)
-        await self._send_ack(message_dict)
-        if "syncPushPackage" not in message_str:
-            return
-
-        try:
-            body = message_dict.get("body", {})
-            push_package = body.get("syncPushPackage", {})
-            data_list = push_package.get("data", [])
-
-            for item in data_list:
-                raw_data = item.get("data")
-                if not raw_data:
-                    continue
-
-                parsed_dict = None
-                try:
-                    parsed_dict = json.loads(raw_data)
-                except json.JSONDecodeError:
-                    try:
-                        decrypted_str = decrypt(raw_data)
-                        if isinstance(decrypted_str, dict):
-                            parsed_dict = decrypted_str
-                        else:
-                            parsed_dict = json.loads(decrypted_str)
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug(f"[FishWSAdapter] 无法按正常流程解密: {e}")
-                        base64_decripted = base64.b64decode(raw_data).decode()
-                        logger.debug(
-                            f"[FishWSAdapter] Base64解密结果: {base64_decripted}"
-                        )
-                        continue
-
-                if not parsed_dict:
-                    continue
-
-                logger.debug(f"[FishWSAdapter] Received raw message: {parsed_dict}")
-
-                from pydantic import ValidationError
-
-                from .message import RecievedMessagePayload
-
-                try:
-                    incoming_msg = RecievedMessagePayload.model_validate(parsed_dict)
-                except ValidationError:
-                    continue
-
-                sender = incoming_msg.data.sender
-                if not sender.user_id or str(sender.user_id) == str(self.bot_id):
-                    continue
-
-                msg_chain = incoming_msg.data.content.to_message_chain()
-                if self.order_tracker and any(
-                    isinstance(segment, FishTradeCard) for segment in msg_chain
-                ):
-                    self.order_tracker.request_sync()
-                if not msg_chain:
-                    return
-
-                from myfish.core.event import MessageEvent
-
-                event = MessageEvent(
-                    cid=incoming_msg.data.cid,
-                    sender_id=str(sender.user_id),
-                    sender_name=sender.name,
-                    messages=msg_chain,
-                    raw_payload=parsed_dict,
-                )
-
-                logger.success(
-                    f"[接收] <- {event.sender_name}({event.sender_id}): {event.summary}"
-                )
-
-                if self._on_receive_callback:
-                    await self._on_receive_callback(event)
-
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"[FishWSAdapter] Driver 清洗数据时发生异常: {e}")
-
-    async def _connect_ws(self):
-        while True:
-            try:
-                logger.info("[FishWSAdapter] 尝试连接 WebSocket 服务器...")
-                async with websockets.connect(
-                    self.base_url, additional_headers=self._get_headers()
-                ) as ws:
-                    self._active_ws = ws
-                    if not await self._init_connection():
-                        return
-                    self._bg_tasks.append(asyncio.create_task(self._heart_beat_loop()))
-
-                    async for message_str in ws:
-                        await self._handle_raw_message(message_str)  # pyright: ignore[reportArgumentType]
-
-            except websockets.ConnectionClosed:
-                self._active_ws = None
-                logger.warning("[FishWSAdapter] WebSocket断开，3秒后重连...")
-                await asyncio.sleep(3)
-            except Exception as e:  # noqa: BLE001
-                self._active_ws = None
-                logger.error(f"[FishWSAdapter] 发生致命错误: {e}")
-                await asyncio.sleep(5)
-
-    async def run(self):
-        """启动 Driver"""
-        try:
-            valid_cookies = await ensure_auth(self.api)
-            if not valid_cookies or not valid_cookies.get("unb"):
-                logger.error("闲鱼登录未完成，停止启动适配器。")
-                return
-            self.bot_id = valid_cookies.get("unb", "")
-            if self.track_orders:
-                from myfish.core.storage import StorageManager
-
-                account_id = self.api._trade_id(self.bot_id)
-                self.order_tracker = OrderTracker(
-                    self.api,
-                    account_id,
-                    self._emit_order_event,
-                    state_path=StorageManager.get_adapter_dir("fish")
-                    / f"orders-{account_id}.json",
-                    interval=self.order_poll_interval,
-                    max_pages=self.order_max_pages,
-                )
-                self._bg_tasks.append(asyncio.create_task(self.order_tracker.run()))
-            self._bg_tasks.append(asyncio.create_task(self._keep_token_alive_loop()))
-            await self._connect_ws()
-        finally:
-            for task in self._bg_tasks:
-                task.cancel()
-            if self._bg_tasks:
-                await asyncio.gather(*self._bg_tasks, return_exceptions=True)
-            self._bg_tasks.clear()
-            self.order_tracker = None
-            await self.api.close()
-
-    async def _emit_order_event(self, event):
-        if self._on_receive_callback:
-            await self._on_receive_callback(event)
+    return False

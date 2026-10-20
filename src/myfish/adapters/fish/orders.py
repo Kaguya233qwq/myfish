@@ -1,90 +1,9 @@
-"""闲鱼订单快照及事件，不将平台交易逻辑引入通用 core。"""
+import re
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, ClassVar
-
-from myfish.core.event import BaseEvent
-from pydantic import BaseModel, ConfigDict
-
-
-class OrderStatus(str, Enum):
-    UNKNOWN = "unknown"
-    PENDING_PAYMENT = "pending_payment"
-    PENDING_SHIP = "pending_ship"
-    SHIPPED = "shipped"
-    COMPLETED = "completed"
-    CLOSED = "closed"
-    REFUNDING = "refunding"
-    REFUNDED = "refunded"
-
-
-_STATUS = {
-    "待付款": OrderStatus.PENDING_PAYMENT,
-    "待发货": OrderStatus.PENDING_SHIP,
-    "已发货": OrderStatus.SHIPPED,
-    "待收货": OrderStatus.SHIPPED,
-    "交易成功": OrderStatus.COMPLETED,
-    "交易关闭": OrderStatus.CLOSED,
-    "退款中": OrderStatus.REFUNDING,
-    "退款成功": OrderStatus.REFUNDED,
-    "已退款": OrderStatus.REFUNDED,
-}
-
-
-class FishOrder(BaseModel):
-    """用于状态跟踪的最小快照，不保存收货地址、电话或完整原始响应。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    order_id: str
-    status: OrderStatus = OrderStatus.UNKNOWN
-    raw_status: str = ""
-    item_id: str = ""
-    buyer_id: str = ""
-    seller_rate_status: str = ""
-    in_refund: bool = False
-
-    @property
-    def is_rated(self) -> bool:
-        return self.seller_rate_status == "4"
-
-    @property
-    def can_ship(self) -> bool:
-        return self.status == OrderStatus.PENDING_SHIP and not self.in_refund
-
-    @property
-    def can_rate(self) -> bool:
-        return (
-            self.status == OrderStatus.COMPLETED
-            and self.seller_rate_status == "5"
-            and not self.in_refund
-        )
-
-    @classmethod
-    def from_sold_item(cls, item: dict[str, Any]) -> "FishOrder":
-        common = item.get("commonData", {})
-        buyer = item.get("buyerInfoVO", {})
-        order_id = str(common.get("orderId") or "")
-        if not order_id or not order_id.isascii() or not order_id.isdigit():
-            raise ValueError("订单列表中缺少有效 orderId")
-        raw = str(common.get("orderStatus") or "")
-        refunding = str(common.get("inRefund", "false")).lower() == "true"
-        return cls(
-            order_id=order_id,
-            status=OrderStatus.REFUNDING
-            if refunding
-            else _STATUS.get(raw, OrderStatus.UNKNOWN),
-            raw_status=raw,
-            item_id=str(common.get("itemId") or ""),
-            buyer_id=str(buyer.get("buyerId") or ""),
-            seller_rate_status=str(common.get("sellerRateStatus") or ""),
-            in_refund=refunding,
-        )
+from .model import FishOrder
 
 
 def parse_sold_orders(response: dict) -> tuple[list[FishOrder], bool]:
-    """只接受已知列表结构，结构改变时不能当作没有订单。"""
     module = response.get("data", {}).get("module")
     if not isinstance(module, dict) or not isinstance(module.get("items"), list):
         raise ValueError("订单列表响应结构不受支持")  # noqa: TRY004
@@ -96,16 +15,45 @@ def parse_sold_orders(response: dict) -> tuple[list[FishOrder], bool]:
     ).lower() == "true"
 
 
-@dataclass
-class FishOrderEvent(BaseEvent):
-    """新观测到订单，不表示该订单刚刚创建。"""
-
-    event_type: ClassVar[str] = "fish.order.discovered"
-    account_id: str
-    order: FishOrder
-
-
-@dataclass
-class FishOrderUpdatedEvent(FishOrderEvent):
-    event_type: ClassVar[str] = "fish.order.updated"
-    previous: FishOrder
+def order_conversation(
+    conversations: list,
+    account_id: str,
+    buyer_id: str,
+    item_id: str,
+    order_id: str,
+) -> str:
+    matches = set()
+    exact = set()
+    for row in conversations:
+        if not isinstance(row, dict):
+            continue
+        user = row.get("singleChatUserConversation")
+        if not isinstance(user, dict):
+            continue
+        conversation = user.get("singleChatConversation")
+        if not isinstance(conversation, dict):
+            continue
+        participants = {
+            str(conversation.get(field, "")).removesuffix("@goofish")
+            for field in ("pairFirst", "pairSecond")
+        }
+        if participants != {account_id, buyer_id}:
+            continue
+        extension = conversation.get("extension")
+        if not isinstance(extension, dict) or str(extension.get("itemId")) != item_id:
+            continue
+        if str(extension.get("itemSellerId", account_id)) != account_id:
+            continue
+        linked_order = str(extension.get("orderId") or "")
+        if linked_order and linked_order != order_id:
+            continue
+        cid = str(conversation.get("cid") or "").removesuffix("@goofish")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", cid):
+            continue
+        matches.add(cid)
+        if linked_order == order_id:
+            exact.add(cid)
+    candidates = exact or matches
+    if len(candidates) > 1:
+        raise ValueError("找到多个买家会话，无法确定订单会话")
+    return next(iter(candidates), "")

@@ -18,7 +18,7 @@ def load_credentials() -> dict | None:
     try:
         data = json.loads(cred_path.read_text(encoding="utf-8"))
         return data
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"[ILink] 读取凭证文件失败: {e}")
         return None
 
@@ -34,7 +34,7 @@ def save_credentials(token: str, base_url: str, account_id: str, user_id: str):
     try:
         _get_cred_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
         logger.info("[ILink] 登录凭证已持久化保存至数据目录")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"[ILink] 保存凭证失败: {e}")
 
 
