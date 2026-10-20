@@ -97,6 +97,78 @@ class PluginLoaderTests(unittest.TestCase):
         self.manager.load_all_plugins()
         self.assertEqual(set(self.manager.plugins), {"builtin", "user"})
 
+    def test_disabled_file_and_package_are_not_imported(self):
+        marker = self.root / "imported.txt"
+        forbidden = (
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text('imported', encoding='utf-8')\n"
+            "import missing_optional_dependency\n"
+        )
+        self.write("disabled_file.py", forbidden)
+        self.write("disabled_package/__init__.py", forbidden)
+        self.write("enabled.py", plugin_source("enabled"))
+        self.manager = PluginManager(
+            {
+                "disabled_file": {"enabled": False},
+                "disabled_package": {"enabled": False},
+            }
+        )
+        with patch("myfish.core.loader.logger") as log:
+            self.manager._load_from_dir(self.directory)
+        self.assertEqual(set(self.manager.plugins), {"enabled"})
+        self.assertFalse(marker.exists())
+        self.assertNotIn(f"{self.module_name}.disabled_file", sys.modules)
+        self.assertNotIn(f"{self.module_name}.disabled_package", sys.modules)
+        log.error.assert_not_called()
+
+    def test_fishy_is_opt_in_even_with_other_settings(self):
+        self.write("fishy/__init__.py", plugin_source("display name"))
+        self.manager = PluginManager({"fishy": {"port": 8788}})
+        self.manager._load_from_dir(self.directory)
+        self.assertEqual(self.manager.plugins, {})
+        self.assertNotIn(f"{self.module_name}.fishy", sys.modules)
+        self.manager = PluginManager({"fishy": {"enabled": True, "port": 8788}})
+        self.manager._load_from_dir(self.directory)
+        self.assertEqual(set(self.manager.plugins), {"display name"})
+
+    def test_config_uses_entry_name_and_other_plugins_stay_enabled_by_default(self):
+        self.write("entry.py", plugin_source("different display name"))
+        self.manager = PluginManager({"entry": {"custom": 42}})
+        self.manager._load_from_dir(self.directory)
+        self.assertEqual(set(self.manager.plugins), {"different display name"})
+
+    def test_same_switch_applies_to_builtin_and_external_entries(self):
+        self.write("off/__init__.py", "raise RuntimeError('disabled builtin imported')")
+        user_root = self.root / f"user_{uuid.uuid4().hex}"
+        user_root.mkdir()
+        (user_root / "off.py").write_text(
+            "raise RuntimeError('disabled external imported')", encoding="utf-8"
+        )
+        self.manager = PluginManager({"off": {"enabled": False}})
+        self.manager.builtin_plugins_dir = self.directory
+        self.manager.user_plugins_dir = user_root
+        with patch("myfish.core.loader.logger") as log:
+            self.manager.load_all_plugins()
+        self.assertEqual(self.manager.plugins, {})
+        log.error.assert_not_called()
+
+    def test_echo_switch_controls_real_echo_handlers(self):
+        source = (self.manager.builtin_plugins_dir / "echo.py").read_text(
+            encoding="utf-8"
+        )
+        self.write("echo.py", source)
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                manager = PluginManager({"echo": {"enabled": enabled}})
+                manager._load_from_dir(self.directory)
+                if enabled:
+                    self.assertEqual(
+                        len(manager.plugins["回声插件"].message_handlers), 2
+                    )
+                else:
+                    self.assertEqual(manager.plugins, {})
+                    self.assertNotIn(f"{self.module_name}.echo", sys.modules)
+
 
 if __name__ == "__main__":
     unittest.main()

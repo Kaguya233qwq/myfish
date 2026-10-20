@@ -3,6 +3,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
+from ..core.event import BaseEvent
 from .rule import Rule, is_fullmatch, is_keywords, is_regex, is_startswith
 
 
@@ -21,6 +22,26 @@ class Plugin:
         self.metadata = metadata
         self.message_handlers: list[dict] = []
         self.event_handlers: dict[str, list[dict]] = defaultdict(list)
+        self.startup_handlers: list[Callable] = []
+        self.shutdown_handlers: list[Callable] = []
+
+    def on_startup(self):
+        """注册启动钩子。"""
+
+        def register(func):
+            self.startup_handlers.append(func)
+            return func
+
+        return register
+
+    def on_shutdown(self):
+        """注册关闭钩子。"""
+
+        def register(func):
+            self.shutdown_handlers.append(func)
+            return func
+
+        return register
 
     def on_message(self, rule: Rule | Callable | None = None):
         """注册一个消息处理器
@@ -36,7 +57,7 @@ class Plugin:
 
         return decorator
 
-    def on_event(self, event_type: str, rule: Rule | Callable | None = None):
+    def on_event(self, event: type[BaseEvent], rule: Rule | Callable | None = None):
         """注册一个特定类型的事件处理器
         rule参数可以是一个Rule对象或者一个可调用的函数
         """
@@ -47,7 +68,9 @@ class Plugin:
             )
 
             # 将处理函数注册到指定的 event_type 槽位中
-            self.event_handlers[event_type].append({"func": func, "rule": final_rule})
+            self.event_handlers[event.event_type].append(
+                {"func": func, "rule": final_rule}
+            )
 
             return func
 

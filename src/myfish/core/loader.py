@@ -3,9 +3,11 @@ import inspect
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from myfish.core.registry import AdapterRegistry
 
+from .config import BotConfig
 from .logger import logger
 from .plugin import Plugin
 
@@ -13,8 +15,9 @@ from .plugin import Plugin
 class PluginManager:
     """全局插件注册表与生命周期管理器"""
 
-    def __init__(self):
+    def __init__(self, plugin_configs: dict[str, dict[str, Any]] | None = None):
         self.plugins: dict[str, Plugin] = {}
+        self._plugin_configs = BotConfig(plugins=plugin_configs or {}).plugins
 
         self.package_root = Path(__file__).resolve().parent.parent
         self.builtin_plugins_dir = self.package_root / "builtin_plugins"
@@ -70,6 +73,9 @@ class PluginManager:
                     logger.warning(f"同名插件包优先，跳过单文件插件: {file.name}")
                     continue
                 module_name = f"{package_name}.{name}"
+                if self._plugin_configs.get(name, {}).get("enabled", True) is False:
+                    logger.info(f"插件已禁用: {module_name}")
+                    continue
 
                 try:
                     module = importlib.import_module(module_name)

@@ -3,7 +3,7 @@ import inspect
 from collections.abc import Callable
 from typing import Any, ForwardRef, get_args, get_origin
 
-from .adapter import BaseAdapter
+from .adapter import AdapterT, BaseAdapter
 from .bot import Bot
 from .event import BaseEvent, MessageEvent
 from .loader import PluginManager
@@ -13,10 +13,15 @@ from .logger import logger
 class Engine:
     """全局核心引擎：管理多端适配器、插件生态和事件循环"""
 
-    def __init__(self):
+    def __init__(self, *, plugin_configs: dict[str, dict[str, Any]] | None = None):
         self.adapters: list[BaseAdapter] = []
         self._background_tasks: set[asyncio.Task] = set()
-        self.plugin_manager = PluginManager()
+        self._service_tasks: set[asyncio.Task] = set()
+        self.plugin_manager = PluginManager(plugin_configs)
+
+    def add_service_task(self, task: asyncio.Task):
+        """登记由引擎管理的后台任务。"""
+        self._service_tasks.add(task)
 
     def add_adapter(self, adapter: BaseAdapter):
         """挂载适配器，并为其动态生成专属的 Bot 上下文"""
@@ -29,17 +34,15 @@ class Engine:
         """为每个适配器创建一个闭包回调函数，捕获专属的 Bot 上下文"""
 
         async def _callback(event: BaseEvent):
-            await self._dispatch_event(bot, event)
+            await self.dispatch_event(bot, event)
 
         return _callback
 
     def load_all_plugins(self):
         self.plugin_manager.load_all_plugins()
 
-    async def _dispatch_event(self, bot: Bot[BaseAdapter[Any]], event: BaseEvent):
-        """事件分发器
-        将接收到的事件分发给所有注册的插件处理函数。
-        """
+    async def dispatch_event(self, bot: Bot[AdapterT], event: BaseEvent) -> None:
+        """分发事件至匹配的插件处理器。"""
 
         async def _do_reply(msg):
             if not isinstance(event, MessageEvent):
@@ -126,5 +129,31 @@ class Engine:
     async def run(self):
         """多端并发启动"""
         self.load_all_plugins()
-        tasks = [asyncio.create_task(adapter.run()) for adapter in self.adapters]
-        await asyncio.gather(*tasks)
+        tasks = []
+        started = []
+        try:
+            for plugin in self.plugin_manager.plugins.values():
+                started.append(plugin)
+                for handler in plugin.startup_handlers:
+                    await handler(self)
+            tasks = [asyncio.create_task(adapter.run()) for adapter in self.adapters]
+            tasks.extend(self._service_tasks)
+            if tasks:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+                for task in done:
+                    task.result()
+        finally:
+            for plugin in reversed(started):
+                for handler in reversed(plugin.shutdown_handlers):
+                    try:
+                        await handler(self)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(
+                            f"插件关闭失败: {plugin.metadata.name} ({type(exc).__name__})"
+                        )
+            pending = [*tasks, *self._background_tasks, *self._service_tasks]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            self._service_tasks.clear()

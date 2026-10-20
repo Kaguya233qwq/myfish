@@ -39,7 +39,7 @@ class EventDispatchTests(unittest.IsolatedAsyncioTestCase):
         async def message(event: MessageEvent):
             calls.append("message")
 
-        @self.plugin.on_event("fish.order.updated")
+        @self.plugin.on_event(FishOrderUpdatedEvent)
         async def changed(event: FishOrderUpdatedEvent, bot: FishBot):
             self.assertIs(bot.adapter, self.adapter)
             calls.append(event.order.status)
@@ -57,7 +57,7 @@ class EventDispatchTests(unittest.IsolatedAsyncioTestCase):
 
         observed = []
 
-        @self.plugin.on_event("message")
+        @self.plugin.on_event(MessageEvent)
         async def observe(event: MessageEvent):
             observed.append(event.sender_id)
 
@@ -71,7 +71,7 @@ class EventDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_wrong_event_annotation_and_adapter_are_skipped(self):
         calls = []
 
-        @self.plugin.on_event("fish.order.discovered")
+        @self.plugin.on_event(FishOrderEvent)
         async def wrong_type(event: MessageEvent):
             calls.append("wrong")
 
@@ -82,7 +82,7 @@ class EventDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [])
         self.plugin.metadata.support_adapters = ["ilink"]
 
-        @self.plugin.on_event("fish.order.discovered")
+        @self.plugin.on_event(FishOrderEvent)
         async def wrong_adapter(event):
             calls.append("wrong adapter")
 

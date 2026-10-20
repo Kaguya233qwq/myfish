@@ -210,3 +210,7 @@ config.toml
 
 # VS Code workspace settings
 .vscode/
+
+local/
+
+AGENTS.md

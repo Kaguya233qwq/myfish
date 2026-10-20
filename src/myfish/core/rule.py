@@ -24,7 +24,6 @@ class Rule:
 
 
 def _get_text(event: MessageEvent) -> str:
-    """内部辅助函数：从 Event 中提取字符串，请根据你的真实 Event 结构修改"""
     return event.plain_text
 
 

@@ -1,19 +1,12 @@
 # myfish/core/config.py
 import os
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    try:
-        import tomli as tomllib
-    except ImportError:
-        raise ImportError("Python 3.11 以下版本需要安装 tomli 库: pip install tomli")
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AdapterConfig(BaseModel):
@@ -23,8 +16,14 @@ class AdapterConfig(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+def _default_plugins() -> dict[str, dict[str, Any]]:
+    return {"fishy": {"enabled": False}, "echo": {"enabled": True}}
+
+
 class BotConfig(BaseModel):
     """全局 Bot 配置模型"""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     name: str = "MyFishBot"
     logger_level: str = "INFO"
@@ -33,6 +32,19 @@ class BotConfig(BaseModel):
     data_dir: str = "data"  # 默认数据存储目录
     superusers: list[str] = Field(default_factory=list)
     adapters: list[AdapterConfig] = Field(default_factory=list)
+    plugins: dict[str, dict[str, Any]] = Field(default_factory=_default_plugins)
+
+    @field_validator("plugins")
+    @classmethod
+    def _validate_plugins(
+        cls, plugins: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        result = _default_plugins()
+        for name, settings in plugins.items():
+            if "enabled" in settings and not isinstance(settings["enabled"], bool):
+                raise ValueError(f"插件 {name} 的 enabled 必须为布尔值")
+            result[name] = {**result.get(name, {}), **settings}
+        return result
 
 
 class ConfigManager:
@@ -112,15 +124,22 @@ superusers = []
 id = "fish"
 [adapters.config]
 cookies = "" # 不填则扫码登陆
-# 可选：订单状态跟踪，只读同步；不会自动发货或评价
-# track_orders = true
-# order_poll_interval = 60
-# order_max_pages = 5
 
 # 🦞 微信ClawBot适配器 (ilink)
 # [[adapters]]
 # id = "ilink"
 # [adapters.config]
+
+# 插件开关使用文件名或包目录名，修改后重启生效。
+# 商品管理后台需先安装 myfish[fishy]，再改为 true。
+[plugins.fishy]
+enabled = false
+host = "127.0.0.1"
+port = 8787
+
+# 回声示例插件，设为 false 关闭自动回复。
+[plugins.echo]
+enabled = true
 """
         try:
             toml_path.parent.mkdir(parents=True, exist_ok=True)

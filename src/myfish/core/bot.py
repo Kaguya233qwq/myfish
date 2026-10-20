@@ -14,7 +14,7 @@ class Bot(Generic[AdapterT]):
         self, target_id: str, message: MessageSegment | MessageChain, cid: str = ""
     ):
         """纯粹的发送代理"""
-        await self.adapter.send(target_id, message, cid)
+        return await self.adapter.send(target_id, message, cid)
 
     @property
     def bot_id(self) -> str:
