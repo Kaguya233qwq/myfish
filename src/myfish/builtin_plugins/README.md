@@ -32,6 +32,6 @@ enabled = false
 ```
 
 内建与外部插件使用相同规则。禁用的入口不会被导入，不会注册处理器或执行启动、关闭钩子。
-修改后重启生效。
+修改后重启生效。Fishy 默认关闭，其他插件默认加载；开启 Fishy 使用 `[plugins.fishy]` 的 `enabled = true`。
 
 回声插件默认开启，设置 `[plugins.echo]` 的 `enabled = false` 可关闭文本和图片自动回复。
