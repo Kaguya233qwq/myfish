@@ -19,4 +19,4 @@ class Bot(Generic[AdapterT]):
     @property
     def bot_id(self) -> str:
         """获取当前 Bot 的 ID"""
-        return getattr(self.adapter, "bot_id", "unknown")
+        return self.adapter.bot_id

@@ -30,7 +30,7 @@ class AdapterRegistry:
         adapter_class = cls._adapters.get(adapter_id)
         if not adapter_class:
             raise ValueError(
-                f"未知适配器 [{adapter_id}]！请检查 config.toml 拼写或是否遗漏了 import。"
+                f"未知适配器 [{adapter_id}]！请检查 config.toml 拼写或依赖是否缺失"
             )
 
         return adapter_class.setup(**kwargs)

@@ -13,7 +13,7 @@ async def main(config: BotConfig | None = None) -> None:
     logger.info("配置加载成功，正在启动 Bot...")
     if not config.adapters:
         logger.warning("配置文件中未提供任何适配器，bot 将无法连接任何平台。")
-        logger.warning("请编辑 config.toml 添加适配器配置后重启。")
+        logger.warning("请编辑 config.toml 启用或添加适配器配置后重启。")
         logger.info("继续启动插件服务；平台消息功能在配置适配器后可用。")
     engine = Engine(plugin_configs=config.plugins)
     load_adapters(config.adapters, engine)
