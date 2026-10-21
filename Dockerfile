@@ -1,28 +1,31 @@
-# 环境准备
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim-bookworm AS builder
-RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /myfish
-ENV UV_DEFAULT_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
-ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV UV_DEFAULT_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple" \
+    UV_LINK_MODE=copy
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-project --no-dev
 
-# 运行
+COPY src/ ./src/
+COPY pyproject.toml uv.lock hatch_build.py README.md LICENSE ./
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
 FROM python:3.12-slim-bookworm
-WORKDIR /myfish
 
+WORKDIR /myfish
 ARG TARGETARCH
 
-COPY --from=builder /myfish/.venv /myfish/.venv
-COPY src/ ./src/
-COPY pyproject.toml uv.lock ./
+COPY --from=builder /bin/uv /bin/uvx /bin/
+COPY --from=builder /myfish/ /myfish/
+COPY docker-entrypoint.sh /usr/local/bin/myfish-entrypoint
 
 RUN mkdir -p /myfish/plugins /myfish/data
 
@@ -32,9 +35,15 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         rm -f src/myfish/adapters/fish/libs/sign_core_linux.so src/myfish/adapters/fish/libs/*.dll; \
     fi
 
+ENV PATH="/myfish/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    MYFISH_CONFIG_PATH="/myfish/data/config.toml" \
+    UV_DEFAULT_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple" \
+    UV_LINK_MODE=copy
+
 VOLUME ["/myfish/plugins", "/myfish/data"]
 
-ENV PATH="/myfish/.venv/bin:$PATH"
-ENV PYTHONPATH="/myfish/src:$PYTHONPATH"
+STOPSIGNAL SIGINT
 
-CMD ["python", "src/myfish/main.py"]
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/myfish-entrypoint"]
+CMD ["myfish", "run"]

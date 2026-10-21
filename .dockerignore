@@ -1,6 +1,7 @@
 .git/
 .github/
 .venv/
+.myfish/
 __pycache__/
 *.pyc
 
@@ -12,6 +13,8 @@ myfish_auth.json
 plugins/
 data/
 
-README.md
-LICENSE
 .gitignore
+config.toml
+src/myfish/builtin_plugins/fishy/frontend/node_modules/
+src/myfish/builtin_plugins/fishy/frontend/test-results/
+src/myfish/builtin_plugins/fishy/frontend/playwright-report/
