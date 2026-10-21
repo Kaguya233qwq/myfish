@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { useWorkspace } from "../composables/useWorkspace";
-import { Package, Plus, Search } from "@lucide/vue";
+import { Package, Plus, RefreshCw, Search } from "@lucide/vue";
 import { label, date, money, image, message } from "../utils/format";
 import { computed } from "vue";
+import type { Product } from "../types";
 
 const {
   busy,
+  accounts,
   products,
   search,
   api,
@@ -25,6 +27,19 @@ const filtered = computed(() =>
     `${product.title} ${product.item_id}`.includes(search.value),
   ),
 );
+async function configureType(product: Product, event: Event) {
+  const target = event.target as HTMLSelectElement;
+  const productType = target.value;
+  target.value = "";
+  if (productType !== "virtual" && productType !== "physical") return;
+  await run(
+    () =>
+      api(`/products/${product.id}/product-type`, "PUT", {
+        product_type: productType,
+      }),
+    "商品类型已设置",
+  );
+}
 </script>
 <template>
   <section class="panel">
@@ -32,6 +47,19 @@ const filtered = computed(() =>
       <span
         ><b>{{ products.length }}</b> 个商品</span
       >
+      <button
+        v-for="account in accounts"
+        :key="account.id"
+        :disabled="busy || !account.connected"
+        @click="
+          run(
+            () => api('/accounts/' + account.id + '/products/sync', 'POST'),
+            '在售商品已同步',
+          )
+        "
+      >
+        <RefreshCw :size="15" />同步商品 {{ account.id }}
+      </button>
       <div class="search">
         <Search :size="16" /><input
           v-model="search"
@@ -67,7 +95,11 @@ const filtered = computed(() =>
                   <b>{{ p.title }}</b
                   ><small
                     >{{
-                      p.product_type === "physical" ? "实物商品" : "虚拟商品"
+                      p.product_type === "unknown"
+                        ? "待设置商品类型"
+                        : p.product_type === "physical"
+                          ? "实物商品"
+                          : "虚拟商品"
                     }}
                     ·
                     {{ JSON.parse(p.category).catName || "未选品类" }}</small
@@ -81,7 +113,18 @@ const filtered = computed(() =>
               <b>¥ {{ money(p.price) }}</b>
             </td>
             <td>
-              <template v-if="p.mode === 'disabled'">未设置交付内容</template
+              <select
+                v-if="p.product_type === 'unknown'"
+                :disabled="busy"
+                aria-label="设置商品类型"
+                @change="configureType(p, $event)"
+              >
+                <option value="">请选择商品类型</option>
+                <option value="virtual">虚拟商品</option>
+                <option value="physical">实物商品</option>
+              </select>
+              <template v-else-if="p.mode === 'disabled'"
+                >未设置交付内容</template
               ><template v-else-if="p.product_type === 'physical'"
                 >快递发货<small
                   >发布数量 {{ p.quantity }} ·

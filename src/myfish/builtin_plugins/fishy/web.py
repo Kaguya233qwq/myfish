@@ -9,7 +9,7 @@ import sqlite3
 import time
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Self, TypeAlias
+from typing import Annotated, Literal, Self, TypeAlias
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -21,7 +21,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from myfish.adapters.fish.api import FishPublishPreparationError
+from myfish.adapters.fish.api import FishAPIError, FishPublishPreparationError
 from myfish.adapters.fish.model import PublishCategory
 
 from .auth import Auth, AuthError, SessionUser
@@ -109,6 +109,10 @@ class ProductInput(BaseModel):
         ):
             raise ValueError("固定运费必须大于零")
         return self
+
+
+class ImportedProductType(BaseModel):
+    product_type: Literal["virtual", "physical"]
 
 
 class CategoryQuery(BaseModel):
@@ -432,6 +436,14 @@ def create_app(service: Service, settings: Settings) -> FastAPI:
         await service.audit(user["username"], "product_created", product_id)
         return {"id": product_id}
 
+    @app.put("/api/products/{product_id}/product-type")
+    async def imported_product_type(
+        product_id: int, body: ImportedProductType, user: CurrentUser
+    ) -> dict[str, bool]:
+        await service.configure_imported_type(product_id, body.product_type)
+        await service.audit(user["username"], "product_type_configured", product_id)
+        return {"ok": True}
+
     @app.put("/api/products/{product_id}/automation")
     async def automation(product_id: int, body: Automation, user: CurrentUser):
         rows = await store.rows(
@@ -626,6 +638,15 @@ def create_app(service: Service, settings: Settings) -> FastAPI:
         return await store.rows(
             "SELECT o.key,o.account_id,o.order_id,o.product_id,o.item_id,o.buyer_id,o.buyer_name,o.amount,o.quantity,o.chat_id,o.platform_status,o.delivery_state,o.error,o.updated,p.product_type,p.mode AS delivery_mode FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.updated DESC LIMIT 500"
         )
+
+    @app.post("/api/accounts/{account_id}/products/sync")
+    async def sync_products(account_id: str, user: CurrentUser) -> dict[str, int]:
+        try:
+            imported = await service.import_listings(account_id)
+        except FishAPIError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        await service.audit(user["username"], "sync_products", account_id)
+        return {"imported": imported}
 
     @app.post("/api/accounts/{account_id}/sync")
     async def sync(account_id: str, user: CurrentUser):

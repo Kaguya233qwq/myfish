@@ -7,7 +7,7 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
@@ -21,6 +21,7 @@ from myfish.adapters.fish.model import FishOrder, OrderStatus
 from myfish.adapters.fish.utils import ListingRejected
 from myfish.core.message import Text
 
+from .catalog import ListingCatalog
 from .editing import ListingEditor
 from .polish import Polisher, PolishResult
 from .tracking import OrderTracker
@@ -49,6 +50,7 @@ class Service:
         self.wake = asyncio.Event()
         self.polisher = Polisher(store, bots)
         self.editor = ListingEditor(store, self.bot)
+        self.catalog = ListingCatalog(store, self.bot)
         self.trackers: dict[str, OrderTracker] = {}
         self._emit = emit
         self._legacy_order_dir = legacy_order_dir
@@ -348,6 +350,28 @@ class Service:
         if state == "published":
             await self.polisher.resume_if_published(product_id)
         return state
+
+    async def configure_imported_type(
+        self, product_id: int, product_type: Literal["virtual", "physical"]
+    ) -> None:
+        def update(db: sqlite3.Connection) -> None:
+            result = db.execute(
+                "UPDATE products SET product_type=?,mode=?,auto_delivery=0,updated=? "
+                "WHERE id=? AND product_type='unknown' AND mode='disabled'",
+                (
+                    product_type,
+                    "physical" if product_type == "physical" else "disabled",
+                    time.time(),
+                    product_id,
+                ),
+            )
+            if result.rowcount != 1:
+                raise Preconditions("只有尚未设置类型的导入商品支持此操作")
+
+        await self.store.call(update, write=True)
+
+    async def import_listings(self, account_id: str) -> int:
+        return await self.catalog.sync(account_id)
 
     async def sync_listings(
         self, account_id: str, *, after_id: int = 0, limit: int = 20

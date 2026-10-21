@@ -13,9 +13,12 @@ from tests.test_fish_receive import payload, push
 
 if not importlib.util.find_spec("fastapi") or not importlib.util.find_spec("uvicorn"):
     raise unittest.SkipTest("虚拟商品 Web 测试需要 fishy 可选依赖")
+from decimal import Decimal
+
 from myfish.adapters.fish import FishAdapter
-from myfish.adapters.fish.api import FishAPI, FishListingUnconfirmed
+from myfish.adapters.fish.api import FishAPI, FishAPIError, FishListingUnconfirmed
 from myfish.adapters.fish.events import FishOrderDiscoveredEvent
+from myfish.adapters.fish.listings import FishListing, FishListingPage
 from myfish.adapters.fish.model import FishOrder, OrderStatus
 from myfish.builtin_plugins.fishy import Runtime, plugin
 from myfish.builtin_plugins.fishy.auth import AuthError
@@ -365,10 +368,74 @@ class FishyTests(unittest.IsolatedAsyncioTestCase):
             all(p["status"] == "published" for p in await self.service.products())
         )
 
+    async def test_product_import_endpoint_and_explicit_type_configuration(self):
+        self.api.get_listing_page.return_value = FishListingPage(
+            (FishListing("99", "平台已有商品", Decimal("9.90")),), False
+        )
+        response = await self.client.post("/api/accounts/11/products/sync")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"imported": 1})
+        products = (await self.client.get("/api/products")).json()
+        self.assertEqual(products[0]["product_type"], "unknown")
+        product_id = products[0]["id"]
+        response = await self.client.put(
+            f"/api/products/{product_id}/product-type",
+            json={"product_type": "physical"},
+        )
+        self.assertEqual(response.status_code, 200)
+        response = await self.client.post("/api/accounts/11/products/sync")
+        self.assertEqual(response.json(), {"imported": 0})
+        product = (await self.client.get("/api/products")).json()[0]
+        self.assertEqual(product["product_type"], "physical")
+        self.assertEqual(product["mode"], "physical")
+        self.assertEqual(product["auto_delivery"], 0)
+
+    async def test_product_import_reports_remote_errors_and_rejects_missing_csrf(self):
+        self.api.get_listing_page.side_effect = FishAPIError("平台拒绝商品列表查询")
+        response = await self.client.post("/api/accounts/11/products/sync")
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("平台拒绝", response.json()["detail"])
+        self.client.headers.pop("X-CSRF-Token")
+        self.api.get_listing_page.reset_mock()
+        response = await self.client.post("/api/accounts/11/products/sync")
+        self.assertEqual(response.status_code, 403)
+        self.api.get_listing_page.assert_not_awaited()
+
+    async def test_runtime_discovers_account_connected_after_startup(self):
+        runtime = Runtime(Settings(), SimpleNamespace())
+        runtime.service = SimpleNamespace(
+            bots=[self.bot],
+            import_listings=AsyncMock(return_value=0),
+            sync_listings=AsyncMock(return_value=0),
+        )
+        self.bot.adapter._active_ws = None
+        sleeps = 0
+
+        async def connect_then_stop(seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps == 1:
+                self.assertEqual(seconds, 5)
+                self.bot.adapter._active_ws = True
+            else:
+                raise asyncio.CancelledError
+
+        with (
+            patch(
+                "myfish.builtin_plugins.fishy.asyncio.sleep",
+                side_effect=connect_then_stop,
+            ),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await runtime.listing_sync_loop()
+        runtime.service.import_listings.assert_awaited_once_with("11")
+
     async def test_runtime_automatically_syncs_only_connected_accounts(self):
         runtime = Runtime(Settings(), SimpleNamespace())
         runtime.service = SimpleNamespace(
-            bots=[self.bot], sync_listings=AsyncMock(return_value=1)
+            bots=[self.bot],
+            import_listings=AsyncMock(return_value=0),
+            sync_listings=AsyncMock(return_value=1),
         )
         with (
             patch(
@@ -378,10 +445,12 @@ class FishyTests(unittest.IsolatedAsyncioTestCase):
             self.assertRaises(asyncio.CancelledError),
         ):
             await runtime.listing_sync_loop()
+        runtime.service.import_listings.assert_awaited_once_with("11")
         runtime.service.sync_listings.assert_awaited_once_with(
             "11", after_id=0, limit=20
         )
         runtime.service.sync_listings.reset_mock()
+        runtime.service.import_listings.reset_mock()
         self.bot.adapter._active_ws = None
         with (
             patch(
@@ -392,6 +461,7 @@ class FishyTests(unittest.IsolatedAsyncioTestCase):
         ):
             await runtime.listing_sync_loop()
         runtime.service.sync_listings.assert_not_awaited()
+        runtime.service.import_listings.assert_not_awaited()
 
     async def test_review_sync_and_reshelf_block_duplicate_publish_and_polish(self):
         product_id = await self.service.add_product(self.product(mode="reusable"))

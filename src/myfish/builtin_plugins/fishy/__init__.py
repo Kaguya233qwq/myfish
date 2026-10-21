@@ -53,14 +53,12 @@ class Runtime:
             from .web import create_app
         except ImportError as exc:
             raise RuntimeError(
-                "商品管理插件缺少 Web 依赖，请安装插件目录下的 requirements.txt，或在配置中禁用插件"
+                "商品管理插件缺少 Web 依赖，请执行 myfish sync 后使用 myfish run，或使用 uv run --extra fishy src/myfish/main.py"
             ) from exc
         from .service import Service
         from .store import Store
 
-        directory = self.settings.data_dir or StorageManager.get_plugin_dir(
-            "fishy"
-        )
+        directory = self.settings.data_dir or StorageManager.get_plugin_dir("fishy")
         store = Store(directory)
         await store.initialize()
         if not (await store.rows("SELECT COUNT(*) AS n FROM users"))[0]["n"]:
@@ -148,11 +146,21 @@ class Runtime:
         if service is None:
             return
         cursors: dict[str, int] = {}
+        next_sync: dict[str, float] = {}
+        loop = asyncio.get_running_loop()
         while True:
             for bot in service.bots:
                 if not bot.bot_id or not bot.adapter._active_ws:
+                    next_sync.pop(bot.bot_id, None)
+                    continue
+                if loop.time() < next_sync.get(bot.bot_id, 0):
                     continue
                 try:
+                    imported = await service.import_listings(bot.bot_id)
+                    if imported:
+                        logger.info(
+                            "已从闲鱼导入 {} 个在售商品，账号 {}", imported, bot.bot_id
+                        )
                     cursors[bot.bot_id] = await service.sync_listings(
                         bot.bot_id,
                         after_id=cursors.get(bot.bot_id, 0),
@@ -162,7 +170,11 @@ class Runtime:
                     logger.warning(
                         "商品状态自动同步未完成，保留原状态: {}", type(exc).__name__
                     )
-            await asyncio.sleep(self.settings.listing_sync_seconds)
+                finally:
+                    next_sync[bot.bot_id] = (
+                        loop.time() + self.settings.listing_sync_seconds
+                    )
+            await asyncio.sleep(5)
 
     async def stop(self):
         if self.server:

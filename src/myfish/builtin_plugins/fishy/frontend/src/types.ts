@@ -18,7 +18,7 @@ export interface Product {
   draft_state: string;
   draft_synced_at: number;
   draft_error: string | null;
-  product_type: "virtual" | "physical";
+  product_type: "virtual" | "physical" | "unknown";
   category: string;
   quantity: number;
   shipping: "free" | "fixed";
@@ -36,7 +36,7 @@ export interface Product {
 }
 export interface Order {
   delivery_mode: string;
-  product_type: "virtual" | "physical";
+  product_type: "virtual" | "physical" | "unknown";
   key: string;
   order_id: string;
   amount: string;

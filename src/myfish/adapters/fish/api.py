@@ -11,9 +11,18 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 from loguru import logger
+from pydantic import JsonValue, ValidationError
 
 from myfish.core.adapter import BaseAPI
 
+from .listings import (
+    FishListing,
+    FishListingPage,
+    ListingData,
+    ListingGroup,
+    ListingPageData,
+    ListingStatus,
+)
 from .model import PublishCategory
 from .orders import order_conversation
 from .sign import generate_device_id, generate_sign
@@ -610,20 +619,90 @@ class FishAPI(BaseAPI):
         return await self.get_user_info(user_id="", is_self=True)
 
     async def get_item_list(
-        self, user_id: str, page: int = 1, page_size: int = 20
+        self,
+        user_id: str,
+        page: int = 1,
+        page_size: int = 20,
+        *,
+        next_page_model: JsonValue = None,
+        next_page_num: int | str | None = None,
+        group: ListingGroup | None = None,
     ) -> dict:
-        """获取卖家商品列表"""
-        data = {
+        """获取卖家商品列表。"""
+        data: dict[str, Any] = {
             "userId": user_id,
             "pageNumber": page,
             "pageSize": page_size,
+            "needGroupInfo": page == 1,
         }
+        if next_page_model is not None:
+            data["nextPageModel"] = next_page_model
+        if next_page_num is not None:
+            data["nextPageNum"] = next_page_num
+        if group is not None:
+            data.update(group.model_dump(by_alias=True, exclude={"group_type"}))
         extra_params = {
             "spm_pre": "a21ybx.home.nav.1.62953da6OYFsax",
             "log_id": "62953da6OYFsax",
         }
         return await self._call_mtop(
             "mtop.idle.web.xyh.item.list", "1.0", data, extra_params
+        )
+
+    async def get_listing_page(
+        self,
+        user_id: str,
+        page: int = 1,
+        page_size: int = 20,
+        *,
+        previous: FishListingPage | None = None,
+    ) -> FishListingPage:
+        response = await self.get_item_list(
+            user_id,
+            page,
+            page_size,
+            next_page_model=previous.next_page_model if previous else None,
+            next_page_num=previous.next_page_num if previous else None,
+            group=previous.group if previous else None,
+        )
+        codes = response.get("ret")
+        if not isinstance(codes, list) or not any(
+            str(code).split("::", 1)[0] == "SUCCESS" for code in codes
+        ):
+            raise FishAPIError("平台拒绝商品列表查询，请检查账号登录状态或安全验证")
+        try:
+            data = ListingPageData.model_validate(response.get("data"))
+        except ValidationError as exc:
+            raise FishAPIError("平台商品列表响应格式异常，未将其视为空列表") from exc
+        items: list[FishListing] = []
+        for card in data.card_list:
+            if card.card_type != 1003:
+                continue
+            if card.card_data is None:
+                raise FishAPIError("平台商品卡片缺少商品数据")
+            try:
+                if ListingStatus.model_validate(card.card_data).item_status != 0:
+                    continue
+                item = ListingData.model_validate(card.card_data)
+            except ValidationError as exc:
+                raise FishAPIError("平台商品卡片格式异常") from exc
+            items.append(FishListing(item.id, item.title, item.price_info.price))
+        group = previous.group if previous else None
+        if group is None:
+            group = next(
+                (
+                    group
+                    for group in data.item_group_list
+                    if group.default_group and group.group_type == 0
+                ),
+                None,
+            )
+        return FishListingPage(
+            items=tuple(items),
+            has_more=data.next_page,
+            next_page_model=data.next_page_model,
+            next_page_num=data.next_page_num,
+            group=group,
         )
 
     async def get_item_info(self, item_id: str) -> dict:
