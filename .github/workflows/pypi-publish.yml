@@ -4,9 +4,23 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已构建并发布的版本标签
+        required: true
+        type: string
+      wheel_run_id:
+        description: 成功构建 Wheel 的工作流运行 ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   build-wheels:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -51,8 +65,139 @@ jobs:
       - name: 下载所有打好的轮子
         uses: actions/download-artifact@v4
         with:
+          pattern: wheels-*
           path: dist
           merge-multiple: true
 
       - name: 发布到 PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  publish-release:
+    needs: publish-to-pypi
+    if: >-
+      always() &&
+      (needs.publish-to-pypi.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: release-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      WHEEL_RUN_ID: ${{ inputs.wheel_run_id || github.run_id }}
+    steps:
+      - name: 检出版本代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: 校验手动补发的构建来源
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          gh run view "$WHEEL_RUN_ID" \
+            --json headSha,headBranch,event,conclusion > "$RUNNER_TEMP/wheel-run.json"
+          python - <<'PYCODE'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = json.loads((Path(os.environ["RUNNER_TEMP"]) / "wheel-run.json").read_text())
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if (
+              run["headSha"] != commit
+              or run["headBranch"] != os.environ["RELEASE_TAG"]
+              or run["event"] != "push"
+              or run["conclusion"] != "success"
+          ):
+              raise SystemExit("构建记录必须是对应版本标签下已成功完成的发布工作流")
+          PYCODE
+
+      - name: 等待对应 Docker 镜像发布成功
+        run: |
+          commit=$(git rev-parse HEAD)
+          run_id=""
+          for attempt in $(seq 1 60); do
+            run_id=$(gh run list --workflow docker-publish.yml \
+              --commit "$commit" --event push --limit 100 \
+              --json databaseId,headBranch | \
+              jq -r --arg tag "$RELEASE_TAG" \
+                'map(select(.headBranch == $tag)) | sort_by(.databaseId) | last | .databaseId // empty')
+            if [ -n "$run_id" ]; then
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$run_id" ]; then
+            echo "未找到对应版本的 Docker 发布工作流" >&2
+            exit 1
+          fi
+          gh run watch "$run_id" --exit-status --interval 15
+
+      - name: 下载所有平台 Wheel
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.WHEEL_RUN_ID }}
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: 打包发布产物并生成更新日志链接
+        run: |
+          python - <<'PYCODE'
+          import email
+          import hashlib
+          import os
+          import tomllib
+          import zipfile
+          from pathlib import Path
+          from urllib.parse import quote
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          directory = Path("dist")
+          wheels = sorted(directory.glob("*.whl"))
+          if not wheels:
+              raise SystemExit("未找到 Wheel 构建产物")
+          for wheel in wheels:
+              with zipfile.ZipFile(wheel) as archive:
+                  metadata_files = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+                  if len(metadata_files) != 1:
+                      raise SystemExit(f"Wheel 元数据无效：{wheel.name}")
+                  metadata = email.message_from_bytes(archive.read(metadata_files[0]))
+                  if metadata["Name"] != "myfish" or metadata["Version"] != version:
+                      raise SystemExit(f"Wheel 与目标版本不符：{wheel.name}")
+          bundle = directory / f"myfish-{version}-wheels.zip"
+          with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+              for wheel in wheels:
+                  archive.write(wheel, wheel.name)
+          checksums = []
+          for artifact in [*wheels, bundle]:
+              with artifact.open("rb") as stream:
+                  digest = hashlib.file_digest(stream, "sha256").hexdigest()
+              checksums.append(f"{digest}  {artifact.name}")
+          (directory / "SHA256SUMS").write_text("\n".join(checksums) + "\n", encoding="utf-8")
+          repository = os.environ["GITHUB_REPOSITORY"]
+          tag = quote(os.environ["RELEASE_TAG"], safe="")
+          Path("release-notes.md").write_text(
+              f"## 📝 详细更新日志\n\nFull Changelog: https://github.com/{repository}/commits/{tag}\n",
+              encoding="utf-8",
+          )
+          PYCODE
+
+      - name: 发布 GitHub Release
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/*.whl dist/*-wheels.zip dist/SHA256SUMS --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              dist/*.whl dist/*-wheels.zip dist/SHA256SUMS \
+              --title "$RELEASE_TAG" --notes-file release-notes.md --verify-tag
+          fi
