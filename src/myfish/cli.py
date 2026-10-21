@@ -1,5 +1,7 @@
 import argparse
+import asyncio
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,12 +27,14 @@ def init_project(project_name: str):
             "- 🔌 **插件开发**: 请在`plugins/` 目录下新建单py文件或python的pkg, 框架启动时会自动导入。\n"
             "- 💾 **数据存储**: 账号凭证及其他持久化数据会自动存入 `data/` 目录。\n\n"
             "**🚀 一键启动:**\n"
-            "在当前目录下执行命令：`myfish run`\n"
+            "在当前目录下先执行 `myfish sync`，再执行 `myfish run`\n"
         )
         (target_dir / "README.md").write_text(readme_text, encoding="utf-8")
 
         logger.success(f"🎉 初始化 Myfish 工作区成功: {project_name}")
-        logger.info(f"👉 下一步请执行:\n    cd {project_name}\n    myfish run")
+        logger.info(
+            f"👉 接下来请执行:\n    cd {project_name}\n    myfish sync\n    myfish run"
+        )
 
     except Exception as e:  # noqa: BLE001
         logger.error(f"❌ 初始化失败: {e}")
@@ -40,6 +44,34 @@ def run_bot():
     """启动机器人引擎
     优先寻找当前目录下的 bot.py 作为入口，否则使用默认的 myfish.main入口
     """
+    from myfish.core.config import load_config
+    from myfish.core.dependency import (
+        DependencyError,
+        PluginDependencies,
+        runtime_paths,
+    )
+
+    environment, python = runtime_paths(Path.cwd().resolve())
+    if Path(sys.prefix).absolute() != environment.absolute():
+        if not python.is_file():
+            raise DependencyError("运行环境尚未建立，请先执行 myfish sync")
+        try:
+            code = subprocess.call(
+                [
+                    str(python),
+                    "-m",
+                    "myfish.cli",
+                    "run",
+                ]
+            )
+        except KeyboardInterrupt:
+            logger.info("bot已手动停止。")
+            return
+        raise SystemExit(code)
+
+    config = load_config()
+    PluginDependencies(config).check()
+
     cwd = Path.cwd()
     bot_file = cwd / "bot.py"
 
@@ -51,19 +83,22 @@ def run_bot():
             logger.info("🔧 使用自定义的入口文件 bot.py 启动...")
             runpy.run_path(str(bot_file), run_name="__main__")
         else:
+            from myfish.main import main as start_bot
+
             logger.info("🐟 启用 Myfish默认的入口启动...")
-            runpy.run_module("myfish.main", run_name="__main__")
+            asyncio.run(start_bot(config))
 
     except KeyboardInterrupt:
         logger.info("bot已手动停止。")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception(f"❌ 运行过程中发生致命错误: {e}")
+        raise SystemExit(1) from e
 
 
 def main():
     """CLI 主路由"""
     parser = argparse.ArgumentParser(
-        prog="myfish", description="🐟 Myfish: 现代化的闲鱼 Bot 开发框架"
+        prog="myfish", description="🐟 Myfish: 现代化的跨平台Bot开发框架"
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True, help="可用命令")
@@ -77,12 +112,26 @@ def main():
         "run", help="启动机器人引擎 (自动挂载当前目录下的 plugins 和 data)"
     )
 
+    sync_parser = subparsers.add_parser("sync", help="同步启用插件的依赖到独立运行环境")
+    sync_parser.add_argument("--upgrade", action="store_true", help="更新锁定版本")
+
     args = parser.parse_args()
 
     if args.command == "init":
         init_project(args.name)
-    elif args.command == "run":
-        run_bot()
+    else:
+        from myfish.core.config import load_config
+        from myfish.core.dependency import DependencyError, PluginDependencies
+
+        try:
+            if args.command == "run":
+                run_bot()
+            elif args.command == "sync":
+                PluginDependencies(load_config()).sync(upgrade=args.upgrade)
+                logger.success("插件依赖同步完成，执行 myfish run 启动")
+        except (DependencyError, OSError, ValueError) as exc:
+            logger.error(str(exc))
+            raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

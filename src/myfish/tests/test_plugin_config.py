@@ -61,15 +61,31 @@ class MainPluginConfigTests(unittest.IsolatedAsyncioTestCase):
             plugins={"fishy": {"enabled": True}, "echo": {"enabled": False}}
         )
         with (
-            patch("myfish.main.load_config", return_value=config),
+            patch("myfish.main.load_config", return_value=config) as load,
             patch("myfish.main.init_logger"),
             patch("myfish.main.load_adapters"),
             patch("myfish.main.Engine") as factory,
         ):
             factory.return_value.run = AsyncMock()
             await main()
+            load.assert_called_once_with()
         factory.assert_called_once_with(plugin_configs=config.plugins)
         factory.return_value.run.assert_awaited_once()
+
+    async def test_main_reuses_configuration_supplied_by_cli(self):
+        config = BotConfig(plugins={"fishy": {"enabled": True}})
+        with (
+            patch("myfish.main.load_config") as load,
+            patch("myfish.main.init_logger"),
+            patch("myfish.main.load_adapters") as adapters,
+            patch("myfish.main.Engine") as factory,
+        ):
+            factory.return_value.run = AsyncMock()
+            await main(config)
+            load.assert_not_called()
+            factory.assert_called_once_with(plugin_configs=config.plugins)
+            adapters.assert_called_once_with(config.adapters, factory.return_value)
+            factory.return_value.run.assert_awaited_once()
 
 
 if __name__ == "__main__":

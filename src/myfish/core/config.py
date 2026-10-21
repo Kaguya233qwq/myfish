@@ -131,7 +131,7 @@ cookies = "" # 不填则扫码登陆
 # [adapters.config]
 
 # 插件开关使用文件名或包目录名，修改后重启生效。
-# 商品管理后台需先安装 myfish[fishy]，再改为 true。
+# 商品管理后台改为 true 后执行 myfish sync，再执行 myfish run。
 [plugins.fishy]
 enabled = false
 host = "127.0.0.1"

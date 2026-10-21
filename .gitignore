@@ -214,3 +214,6 @@ config.toml
 local/
 
 AGENTS.md
+
+# CLI managed plugin runtime
+.myfish/

@@ -8,6 +8,7 @@ from typing import Any
 from myfish.core.registry import AdapterRegistry
 
 from .config import BotConfig
+from .dependency import plugin_entries
 from .logger import logger
 from .plugin import Plugin
 
@@ -61,50 +62,35 @@ class PluginManager:
 
         package_name = directory.name
 
-        for file in sorted(directory.iterdir(), key=lambda path: path.name):
-            if file.name.startswith(("_", ".")):
-                continue
-            is_module = file.is_file() and file.suffix == ".py"
-            is_package = file.is_dir() and (file / "__init__.py").is_file()
-            if is_module or is_package:
-                name = file.stem if is_module else file.name
-                # 同名包与 .py 同时存在时遵循 Python 的包优先规则，避免重复加载。
-                if is_module and (directory / name / "__init__.py").is_file():
-                    logger.warning(f"同名插件包优先，跳过单文件插件: {file.name}")
-                    continue
-                module_name = f"{package_name}.{name}"
-                if self._plugin_configs.get(name, {}).get("enabled", True) is False:
-                    logger.info(f"插件已禁用: {module_name}")
-                    continue
+        for name, file in plugin_entries(directory, self._plugin_configs, logger):
+            module_name = f"{package_name}.{name}"
 
-                try:
-                    module = importlib.import_module(module_name)
-                    plugin_instance = None
+            try:
+                module = importlib.import_module(module_name)
+                plugin_instance = None
 
-                    for _, obj in inspect.getmembers(module):
-                        if isinstance(obj, Plugin):
-                            plugin_instance = obj
-                            break
+                for _, obj in inspect.getmembers(module):
+                    if isinstance(obj, Plugin):
+                        plugin_instance = obj
+                        break
 
-                    if plugin_instance:
-                        plugin_name = plugin_instance.metadata.name
-                        if plugin_name in self.plugins:
-                            logger.warning(
-                                f"插件命名冲突跳过: [{plugin_name}] ({file.name})"
-                            )
-                            continue
-
-                        self.plugins[plugin_name] = plugin_instance
-                        logger.success(
-                            f"✅ 成功加载插件: [{plugin_name}] v{plugin_instance.metadata.version}"
-                        )
-                    else:
+                if plugin_instance:
+                    plugin_name = plugin_instance.metadata.name
+                    if plugin_name in self.plugins:
                         logger.warning(
-                            f"模块 {file.name} 中未找到 Plugin 实例，已跳过。"
+                            f"插件命名冲突跳过: [{plugin_name}] ({file.name})"
                         )
+                        continue
 
-                except Exception as e:  # noqa: BLE001
-                    logger.error(f"❌ 加载插件 {file.name} 失败: {e}")
+                    self.plugins[plugin_name] = plugin_instance
+                    logger.success(
+                        f"✅ 成功加载插件: [{plugin_name}] v{plugin_instance.metadata.version}"
+                    )
+                else:
+                    logger.warning(f"模块 {file.name} 中未找到 Plugin 实例，已跳过。")
+
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ 加载插件 {file.name} 失败: {e}")
 
 
 def load_adapters(adapter_configs: list, engine):
