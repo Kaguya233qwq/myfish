@@ -58,7 +58,7 @@
 
 **Echo（回声示例插件）**
 
-默认启用，演示文本和图片自动回复。可通过 `[plugins.echo]` 关闭。
+默认启用，演示以 `echo` 开头的文本回复及图片消息回复。可通过 `[plugins.echo]` 关闭。
 插件入口结构和加载规则见 [内建插件说明](src/myfish/builtin_plugins/README.md)。
 
 ## 📦 安装与使用
@@ -74,7 +74,8 @@ uv pip install myfish
 myfish init my-project
 cd my-project
 
-# 启动引擎自动生成config.toml
+# 同步依赖并启动（首次同步会生成 config.toml）
+myfish sync
 myfish run
 
 ```
@@ -96,13 +97,21 @@ enabled = false
 ```
 
 Fishy 默认关闭，其他插件默认加载。设置 `enabled = false` 后，加载器跳过插件导入及生命周期钩子。
-启用 Fishy 前安装可选依赖：
+启用 Fishy 后执行同步，再启动：
 
 ```bash
-uv pip install 'myfish[fishy]'
-# 源码开发环境：
-uv sync --extra fishy
+myfish sync
+myfish run
 ```
+
+源码开发时可使用 `uv run myfish sync` 和 `uv run myfish run`。
+`myfish sync --upgrade` 会主动更新允许范围内的依赖版本。
+
+同步会按配置收集启用插件的依赖，统一解析到 `.myfish/requirements.lock`，并安装到工作区的 `.myfish/venv`，不修改项目的 `.venv` 或 `uv.lock`。普通同步复用锁定版本；插件开关或依赖声明变化后重新解析，未变化时直接按已有锁文件同步。需要系统中已安装 `uv`。
+
+`myfish run` 只检查同步状态，不联网安装；检查通过后从独立环境启动，仍支持工作区内的 `bot.py`。首次运行、修改插件依赖或开关后，请先执行 `myfish sync`。直接运行 `src/myfish/main.py` 不经过这套检查；使用该入口启用 Fishy 时需自行传入 `--extra fishy`。
+
+外部包插件在目录下声明 `requirements.txt`，单文件插件使用同名的 `名称.requirements.txt`。禁用插件不参与依赖解析。版本冲突会在安装前报错；安装中途失败时启动检查会要求重新同步。`.myfish/` 是本地生成目录，不应提交到版本库。
 
 ### 2. 源码构建
 
@@ -110,8 +119,8 @@ uv sync --extra fishy
 git clone https://github.com/Kaguya233qwq/myfish
 cd myfish
 uv sync
-uv run src/myfish/main.py
-
+uv run myfish sync
+uv run myfish run
 ```
 
 ### 3. Docker 部署
@@ -125,16 +134,24 @@ services:
     container_name: myfish
     environment:
       - TZ=Asia/Shanghai
-      - MYFISH_CONFIG_PATH=/app/data/config.toml
+      - MYFISH_CONFIG_PATH=/myfish/data/config.toml
     network_mode: host # 或者指定你的自定义虚拟网络
     volumes:
-      - ./plugins:/app/plugins
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - ./plugins:/myfish/plugins
+      - ./data:/myfish/data
+      - myfish-runtime:/myfish/.myfish
 
+volumes:
+  myfish-runtime:
 ```
 
-后台运行：`docker-compose up -d`
+后台运行：`docker compose up -d`。
+
+容器启动后先按挂载的配置及插件执行 `myfish sync`，成功后在 `.myfish/venv` 中执行 `myfish run`。
+首次启动会在 `data/config.toml` 生成默认配置；修改插件开关或依赖后重启容器即可重新同步。
+`myfish-runtime` 卷保留运行环境和依赖锁，普通重启复用锁定版本；首次安装或依赖变化时需要访问包索引。
+同步失败时容器退出，不会继续启动 Bot。启动器通过 `exec` 交接给 Bot，以接收容器停止信号。
+也可使用 `docker compose run --rm myfish myfish sync --upgrade` 更新锁定依赖，操作前先停止 Bot。
 
 ## 🧩 开发用户插件
 

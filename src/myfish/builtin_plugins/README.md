@@ -34,4 +34,20 @@ enabled = false
 内建与外部插件使用相同规则。禁用的入口不会被导入，不会注册处理器或执行启动、关闭钩子。
 修改后重启生效。Fishy 默认关闭，其他插件默认加载；开启 Fishy 使用 `[plugins.fishy]` 的 `enabled = true`。
 
-回声插件默认开启，设置 `[plugins.echo]` 的 `enabled = false` 可关闭文本和图片自动回复。
+回声插件默认开启，文本消息需以 `echo` 开头，图片消息直接触发回复。设置 `[plugins.echo]` 的 `enabled = false` 可关闭插件。
+
+
+## 插件依赖
+
+修改插件开关或依赖声明后，执行 `myfish sync`，再执行 `myfish run`。
+使用 `myfish sync --upgrade` 更新锁定版本。启动不会自动安装依赖。
+
+包插件通过 `<插件目录>/requirements.txt` 声明依赖；单文件插件使用
+`<插件名称>.requirements.txt`。支持本地 `-r` / `-c` 引用，引用文件变化也会触发重新解析。
+依赖发现不会导入插件，禁用插件不参与同步；同名包和单文件并存时包优先。
+内置 Fishy 使用框架的 `fishy` extra，不重复读取其 requirements.txt。
+
+所有启用插件与框架依赖在同一环境中统一求解，冲突时同步失败。
+不要在插件启动钩子中安装依赖。同步环境保存在工作区 `.myfish/venv`，
+不应手动修改；可重新执行 `myfish sync` 修复。同步期间不要启动 Bot，也请先停止运行中的 Bot 再同步。
+若同步进程异常退出留下 `.myfish/syncing`，确认没有同步进程后可删除该空目录再重试。
