@@ -15,20 +15,15 @@ plugin = Plugin(
 )
 
 
-def text_rule(event: MessageEvent) -> bool:
-    """判断消息是否包含纯文本"""
-    return bool(event.plain_text.strip())
-
-
 def image_rule(event: MessageEvent) -> bool:
     """判断消息是否包含图片"""
     return event.get_segments(Image) != []
 
 
 # 编写业务逻辑并注册handler
-@plugin.on_message(text_rule)
+@plugin.on_startswith("echo")
 async def handle_echo(event: MessageEvent):
-    """当收到纯文本消息时，重复发送相同的文本作为回复"""
+    """匹配以echo开头的文本，重复发送相同的文本作为回复"""
 
     assert event.messages[0].type == "text"
     content = event.plain_text.strip()
