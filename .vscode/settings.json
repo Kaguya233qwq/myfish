@@ -1,0 +1,20 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.myfish/venv/bin/python",
+  "python.languageServer": "None",
+  "basedpyright.disableOrganizeImports": true,
+  "basedpyright.analysis.extraPaths": [
+    "${workspaceFolder}/src"
+  ],
+  "ruff.importStrategy": "useBundled",
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.formatOnSaveMode": "file",
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:venv",
+  "python-envs.pythonProjects": []
+}
