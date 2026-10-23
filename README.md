@@ -22,27 +22,37 @@
 ## 🚀 已实现功能/特性
 
 ### 🛠️ 框架核心 (core)
-- [x] **跨平台微内核架构**：引擎与协议彻底解耦。一套插件代码，无缝多端运行。
-- [x] **开发体验 (DX) 优先**：高度标准化的声明式插件路由与泛型依赖注入 (DI)。
-- [x] **云原生 DevOps 规范**：开箱即用的 12-Factor 容器化存储与动态配置引擎。
-- [x] **全链路纯异步调度**：基于 `asyncio` 的非阻塞事件循环，轻松应对海量并发。
-- [x] 插件启动与关闭钩子、类型化事件处理，以及导入前的插件启用/禁用配置。
+
+- [X] **跨平台微内核架构**：引擎与协议彻底解耦。一套插件代码，无缝多端运行。
+- [X] **开发体验 (DX) 优先**：高度标准化的声明式插件路由与泛型依赖注入 (DI)。
+- [X] **云原生 DevOps 规范**：开箱即用的 12-Factor 容器化存储与动态配置引擎。
+- [X] **全链路纯异步调度**：基于 `asyncio` 的非阻塞事件循环，轻松应对海量并发。
+- [X] 插件启动与关闭钩子、类型化事件处理，以及导入前的插件启用/禁用配置。
 
 ### 🔌 内置适配器支持
 
 **🐟 Fish (闲鱼websocket协议) 适配器**
-- [x] 完整的扫码登录与动态鉴权生命周期管理。
-- [x] 高性能计算 Sign 签名与解包 MessagePack。
-- [x] 核心加密算法编译为二进制模块，提供物理级防逆向保护。
-- [x] 深度集成 Web 端常用 API 与实时 WebSocket 长连接通讯。
-- [x] 商品发布、草稿同步、编辑、上下架、类目查询与擦亮 API。
-- [x] 平台交易消息解析、买家会话查询，以及等待发送回执的消息交付。
-- [x] WebSocket 心跳、断线重连及关闭原因诊断。
+
+- [X] 完整的扫码登录与动态鉴权生命周期管理。
+- [X] 高性能计算 Sign 签名与解包 MessagePack。
+- [X] 核心加密算法编译为二进制模块，提供物理级防逆向保护。
+- [X] 深度集成 Web 端常用 API 与实时 WebSocket 长连接通讯。
+- [X] 商品发布、草稿同步、编辑、上下架、类目查询与擦亮 API。
+- [X] 平台交易消息解析、买家会话查询，以及等待发送回执的消息交付。
+- [X] WebSocket 心跳、断线重连及关闭原因诊断。
 
 **🦞 ClawBot (微信ilink协议) 适配器**
-- [x] 零配置、开箱即用的扫码登录快速接入。
-- [x] 全面覆盖绝大部分图文、媒体等核心消息类型的双向收发。
-- [x] 基于纯异步底层构建，提供极高的高并发消息吞吐性能。
+
+- [X] 零配置、开箱即用的扫码登录快速接入。
+- [X] 全面覆盖绝大部分图文、媒体等核心消息类型的双向收发。
+- [X] 基于纯异步底层构建，提供极高的高并发消息吞吐性能。
+
+**🟥 小红书适配器**
+
+* [X] 开箱即用，扫码快速登陆。
+* [X] 私信ws支持文本，图片，视频，笔记卡片消息收发
+* [X] 支持被关注，被点赞，被评论/提到等全局通知事件监听
+* [X] 覆盖大部分平台API操作
 
 ### 内建插件
 
@@ -77,7 +87,6 @@ cd my-project
 # 同步依赖并启动（首次同步会生成 config.toml）
 myfish sync
 myfish run
-
 ```
 
 *初次启动会自动生成 `config.toml`，按需修改其中的适配器参数后重启即可。*
@@ -160,7 +169,7 @@ volumes:
 ```python
 from myfish.core.plugin import Plugin, PluginMetadata
 from myfish.core.event import MessageEvent
-from myfish.adapters.fish import FishBot 
+from myfish.adapters.fish import FishBot
 
 plugin = Plugin(
     metadata=PluginMetadata(
@@ -190,7 +199,6 @@ async def handle_ping(event: MessageEvent):
 async def handle_user_info(event: MessageEvent, bot: FishBot):
     user_info = await bot.adapter.api.get_user_info(event.sender_id)
     await event.reply(f"您的信息：\n{user_info}")
-
 ```
 
 ## 🔌 开发适配器 (Adapter)
@@ -235,7 +243,7 @@ class MockAdapter(BaseAdapter[MockAPI]):
     async def _listen(self):
         raw_payload = '{"user": "1001", "text": "你好，Myfish"}'
         data = json.loads(raw_payload)
-        
+
         event = MessageEvent(
             cid=f"group_{data['user']}",
             sender_id=data["user"],
@@ -243,7 +251,7 @@ class MockAdapter(BaseAdapter[MockAPI]):
             messages=MessageChain([Text(text=data["text"])]),
             raw_payload=data
         )
-        
+
         if self._on_receive_callback:
             await self._on_receive_callback(event)
 
@@ -251,15 +259,17 @@ class MockAdapter(BaseAdapter[MockAPI]):
         plain_text = "".join([seg.text for seg in message if isinstance(seg, Text)])
         payload = {"to": target_id, "content": plain_text}
         # await self.api.send_msg(payload)
-
 ```
 
 ## 📝 TODO
 
-* [ ] **适配器扩展**：支持更多平台内置适配器。
-* [ ] **适配器API 扩展**：增加适配器中如闲鱼的自动擦亮等移动端实用 API。
+* [X] **适配器API 扩展**：增加适配器中如闲鱼的自动擦亮等移动端实用 API。
+* [X] **持久化存储**：引入基于 SQLite 的标准插件数据层 (ORM)。
+* [X] **适配器扩展**：支持更多平台内置适配器。
+* [X] **平台适配**：支持小红书平台
 * [ ] **闲鱼适配器增强**：尝试实现纯 JS 补环境，在本地全自动计算 `x5sec` 过滑块。
-* [ ] **持久化存储**：引入基于 SQLite 的标准插件数据层 (ORM)。
+* [ ] **平台适配：**支持快手平台
+* [ ] **平台适配**：支持飞书平台
 
 ## 🙏 致谢
 

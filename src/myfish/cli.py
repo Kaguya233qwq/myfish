@@ -65,7 +65,7 @@ def run_bot():
                 ]
             )
         except KeyboardInterrupt:
-            logger.info("bot已手动停止。")
+            logger.info("myfish cli已手动退出。")
             return
         raise SystemExit(code)
 

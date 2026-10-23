@@ -46,6 +46,13 @@ class PluginDependencyTests(unittest.TestCase):
         self.assertIn("[fishy]", framework)
         self.assertEqual(files, [enabled / "requirements.txt"])
 
+    def test_xhs_adapter_selects_extra_and_changes_fingerprint(self):
+        before = self.manager.inputs()[2]
+        self.manager.config = BotConfig(adapters=[{"id": "xhs"}])
+        framework, _, after = self.manager.inputs()
+        self.assertIn("[xhs]", framework)
+        self.assertNotEqual(before, after)
+
     def test_single_file_package_precedence_and_nested_changes(self):
         package = self.plugin("example", "-r nested.txt\n")
         nested = package / "nested.txt"

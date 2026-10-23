@@ -64,7 +64,11 @@ class PluginDependencies:
         external = Path(
             os.getenv("MYFISH_PLUGINS_DIR", str(self.root / "plugins"))
         ).resolve()
-        extras = []
+        extras = (
+            ["xhs"]
+            if any(adapter.id == "xhs" for adapter in self.config.adapters)
+            else []
+        )
         files = []
         entries = []
         for directory in (builtin, external):
