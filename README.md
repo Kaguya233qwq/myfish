@@ -1,7 +1,7 @@
 # 🐟 Myfish
 
 > *我的鱼，我做主。*
-> **一个Python的现代化、纯异步、跨平台的Bot开发框架。现已内置闲鱼适配器与微信ClawBot适配器支持。**
+> **一个Python的现代化、纯异步、跨平台的Bot开发框架。现已内置 [闲鱼适配器|微信ClawBot适配器|xhs适配器|b站适配器] 支持。**
 
 ---
 
@@ -54,6 +54,14 @@
 * [X] 支持被关注，被点赞，被评论/提到等全局通知事件监听
 * [X] 覆盖大部分平台API操作
 
+**📺 Bilibili 适配器（开发预览）**
+
+- 扫码登录、文本私信发送，以及文本、图片和视频卡片接收。
+- 增量会话发现、消息分页补齐、持久化游标和自适应轮询。
+- 用户、粉丝、收藏夹、投稿及播放地址查询。
+- 扫码、私信接收和回复通知已通过真实验收；评论读取、回复及点赞接口为实验功能。
+- 配置与能力边界见 [适配器文档](src/myfish/adapters/bilibili/README.md)。
+
 ### 内建插件
 
 **Fishy（渔渔）**
@@ -84,12 +92,14 @@ uv pip install myfish
 myfish init my-project
 cd my-project
 
-# 同步依赖并启动（首次同步会生成 config.toml）
+# 更新配置、同步依赖并启动
 myfish sync
 myfish run
 ```
 
-*初次启动会自动生成 `config.toml`，按需修改其中的适配器参数后重启即可。*
+初始化工作区时会自动生成 `config.toml`。适配器条目通过 `enabled` 控制启用状态，按需修改参数后执行 `myfish sync`，再启动框架。
+
+默认配置由组件注册的 Pydantic 模型生成，支持字段说明、配置块注释及有备份的字段迁移。`myfish config check` 只预览变化和校验问题；`myfish config sync` 只更新配置，不安装依赖。现有配置不会因运行 `myfish run` 而被自动改写。配置声明和迁移规则见 [配置开发文档](docs/configuration.md)。
 
 #### 插件开关
 
@@ -105,7 +115,7 @@ port = 8787
 enabled = false
 ```
 
-Fishy 默认关闭，其他插件默认加载。设置 `enabled = false` 后，加载器跳过插件导入及生命周期钩子。
+Fishy 默认关闭，Echo 默认开启。注册配置模型的插件采用模型中的 `enabled` 默认值，未注册配置的外部插件沿用默认加载行为。设置 `enabled = false` 后，加载器跳过插件运行入口及生命周期钩子。
 启用 Fishy 后执行同步，再启动：
 
 ```bash
