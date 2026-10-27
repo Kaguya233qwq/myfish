@@ -53,7 +53,7 @@ class PluginDependencyTests(unittest.TestCase):
         self.assertIn("[xhs]", framework)
         self.assertNotEqual(before, after)
 
-    def test_single_file_package_precedence_and_nested_changes(self):
+    def test_only_package_dependencies_and_nested_changes_are_discovered(self):
         package = self.plugin("example", "-r nested.txt\n")
         nested = package / "nested.txt"
         nested.write_text("example==1\n")
@@ -63,7 +63,9 @@ class PluginDependencyTests(unittest.TestCase):
         single = package.parent / "single.requirements.txt"
         single.write_text("single-dependency")
         _, files, before = self.manager.inputs()
-        self.assertEqual(files, [package / "requirements.txt", single])
+        self.assertEqual(files, [package / "requirements.txt"])
+        single.write_text("ignored-dependency-change")
+        self.assertEqual(before, self.manager.inputs()[2])
         nested.write_text("example==2\n")
         self.assertNotEqual(before, self.manager.inputs()[2])
 

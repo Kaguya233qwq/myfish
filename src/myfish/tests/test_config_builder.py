@@ -407,7 +407,7 @@ class ConfigDiscoveryTests(unittest.TestCase):
 from myfish.core.config import ConfigRegistry
 entries = ConfigRegistry.discover()
 assert {entry.name for entry in entries} >= {"fish", "ilink", "xhs", "echo", "fishy"}
-assert not any(name in sys.modules for name in ("myfish.adapters.fish", "myfish.adapters.bilibili", "myfish.adapters.xhs", "myfish.builtin_plugins.fishy"))
+assert not any(name in sys.modules for name in ("myfish.adapters.fish", "myfish.adapters.bilibili", "myfish.adapters.xhs", "myfish.builtin_plugins.echo", "myfish.builtin_plugins.fishy"))
 """
         result = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True, check=False
@@ -442,7 +442,7 @@ assert not any(name in sys.modules for name in ("myfish.adapters.fish", "myfish.
                 [spec.name for spec in ConfigRegistry.discover(Path(directory))],
             )
 
-    def test_single_file_config_sidecar_is_not_loaded_as_a_plugin(self):
+    def test_files_and_config_sidecars_are_not_discovered(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "sample.py").write_text("")
@@ -450,8 +450,8 @@ assert not any(name in sys.modules for name in ("myfish.adapters.fish", "myfish.
                 'from myfish.core.config import BaseConfig\nfrom myfish.core.config import ConfigRegistry\n@ConfigRegistry.plugin("sample")\nclass Settings(BaseConfig):\n    enabled: bool = True\n'
             )
             entries = list(plugin_entries(root, {}))
-            self.assertEqual([name for name, _ in entries], ["sample"])
-            self.assertIn(
+            self.assertEqual(entries, [])
+            self.assertNotIn(
                 "sample", [spec.name for spec in ConfigRegistry.discover(root)]
             )
 
@@ -494,8 +494,10 @@ class ConfigCommandTests(unittest.TestCase):
     def test_init_generates_config_without_copying_parent_project_plugins(self):
         plugins = self.root / "plugins"
         plugins.mkdir()
-        (plugins / "parent_plugin.py").write_text("")
-        (plugins / "parent_plugin.config.py").write_text(
+        package = plugins / "parent_plugin"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        (package / "config.py").write_text(
             'from myfish.core.config import BaseConfig\nfrom myfish.core.config import ConfigRegistry\n@ConfigRegistry.plugin("parent_plugin")\nclass Settings(BaseConfig):\n    enabled: bool = False\n'
         )
         result = self.command("init", "new_bot")

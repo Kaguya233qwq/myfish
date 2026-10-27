@@ -55,7 +55,7 @@ class PluginManager:
 
     def _load_from_dir(self, directory: Path) -> None:
         """
-        加载目录内的单文件插件，以及通过 __init__.py 暴露 Plugin 的包。
+        加载目录内通过 __init__.py 暴露 Plugin 的插件包。
         包内子模块由包入口自行导入，不作为独立插件递归扫描。
         """
         if not directory.is_dir():

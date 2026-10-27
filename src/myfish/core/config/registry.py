@@ -106,19 +106,12 @@ class ConfigRegistry:
             for child in sorted(directory.iterdir()):
                 if child.name.startswith(("_", ".")):
                     continue
-                if child.is_dir() and (child / "__init__.py").is_file():
-                    path = child / "config.py"
-                    module = f"{prefix}.{child.name}.{path.stem}" if prefix else ""
-                elif child.suffix == ".py" and not child.name.endswith(".config.py"):
-                    if (directory / child.stem / "__init__.py").is_file():
-                        continue
-                    path = child.with_suffix(".config.py")
-                    module = ""
-                else:
+                if not child.is_dir() or not (child / "__init__.py").is_file():
                     continue
+                path = child / "config.py"
+                module = f"{prefix}.{child.name}.config" if prefix else ""
                 if path.is_file() and cls._is_provider(path):
-                    owner = child.stem if child.is_file() else child.name
-                    providers.append((path.resolve(), module, kind, owner))
+                    providers.append((path.resolve(), module, kind, child.name))
         with cls._lock:
             entries: dict[tuple[Kind, str], ConfigSpec] = {}
             for path, module, kind, owner in providers:

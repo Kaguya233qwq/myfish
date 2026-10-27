@@ -31,13 +31,13 @@ compiled: CompiledConfig = builder.compile(Path("config.toml"))
 
 ## 配置入口
 
-适配器使用 `myfish/adapters/<适配器 ID>/config.py`。包插件使用 `<插件目录>/config.py`；单文件插件使用同级的 `<插件名>.config.py`。
+适配器使用 `myfish/adapters/<适配器 ID>/config.py`。插件统一使用包目录，运行入口为 `<插件目录>/__init__.py`，配置声明位于同目录的 `config.py`，无配置需求时可省略。
 
 配置发现只执行明确使用 `ConfigRegistry.adapter` 或 `ConfigRegistry.plugin` 注册的配置入口，不导入组件的 `__init__.py`、协议客户端和插件处理器。已有插件的普通 `config.py` 不会被当作配置声明执行；配置侧文件也不会被插件加载器作为独立插件导入。
 
 配置入口应只依赖标准库、Pydantic 和 Myfish 配置注册接口。不要导入 API、Web 服务或可选依赖，不要读取账号数据或发起网络请求；依赖安装前也需要执行配置发现。运行代码直接导入该配置模型，避免重复定义。
 
-注册 ID 必须与适配器目录、插件目录或单文件插件名称一致。注册装饰器支持为 `ConfigRegistry` 使用导入别名。
+注册 ID 必须与适配器或插件的包目录名一致。注册装饰器支持为 `ConfigRegistry` 使用导入别名。
 
 ## 适配器配置
 

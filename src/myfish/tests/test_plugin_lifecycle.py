@@ -31,7 +31,8 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "async def stop(engine):\n"
                 "    with marker.open('a', encoding='utf-8') as stream: stream.write('stop\\n')\n"
             )
-            (plugin_dir / "sample.py").write_text(source, encoding="utf-8")
+            (plugin_dir / "sample").mkdir()
+            (plugin_dir / "sample" / "__init__.py").write_text(source, encoding="utf-8")
             engine = Engine(plugin_configs={"sample": {"enabled": enabled}})
             engine.plugin_manager.builtin_plugins_dir = plugin_dir
             engine.plugin_manager.user_plugins_dir = root / "external"

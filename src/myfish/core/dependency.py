@@ -11,10 +11,15 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Iterator, Mapping
 from importlib.metadata import version
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .config import BotConfig
+
+if TYPE_CHECKING:
+    from loguru import Logger
 
 
 class DependencyError(RuntimeError):
@@ -27,22 +32,20 @@ def runtime_paths(root: Path) -> tuple[Path, Path]:
     return environment, environment / executable
 
 
-def plugin_entries(directory: Path, configs: dict, log=None):
-    """通用插件入口规则"""
+def plugin_entries(
+    directory: Path,
+    configs: Mapping[str, Mapping[str, object]],
+    log: Logger | None = None,
+) -> Iterator[tuple[str, Path]]:
+    """发现当前目录下的插件包。"""
     if not directory.is_dir():
         return
     for path in sorted(directory.iterdir()):
-        if path.name.startswith(("_", ".")) or path.name.endswith(".config.py"):
+        if path.name.startswith(("_", ".")):
             continue
-        package = path.is_dir() and (path / "__init__.py").is_file()
-        module = path.is_file() and path.suffix == ".py"
-        if not (package or module):
+        if not path.is_dir() or not (path / "__init__.py").is_file():
             continue
-        name = path.name if package else path.stem
-        if module and (directory / name / "__init__.py").is_file():
-            if log is not None:
-                log.warning(f"同名插件包优先，跳过单文件插件: {path.name}")
-            continue
+        name = path.name
         if configs.get(name, {}).get("enabled", True) is not False:
             yield name, path
         elif log is not None:
@@ -80,11 +83,7 @@ class PluginDependencies:
                 if directory == builtin and name == "fishy":
                     extras.append("fishy")
                     continue
-                requirement = (
-                    path / "requirements.txt"
-                    if path.is_dir()
-                    else path.with_suffix(".requirements.txt")
-                )
+                requirement = path / "requirements.txt"
                 if requirement.is_file():
                     files.append(requirement)
         suffix = f"[{','.join(extras)}]" if extras else ""

@@ -32,7 +32,7 @@ def init_project(project_name: str):
         readme_text = (
             f"# {project_name}\n\n"
             "这是一个基于 Myfish 框架的机器人工作区。\n\n"
-            "- 🔌 **插件开发**: 请在`plugins/` 目录下新建单py文件或python的pkg, 框架启动时会自动导入。\n"
+            "- 🔌 **插件开发**: 在 `plugins/<插件 ID>/__init__.py` 中定义或导出 `Plugin` 实例；配置模型放在同目录的 `config.py` 中，依赖声明放在 `requirements.txt` 中。\n"
             "- 💾 **数据存储**: 账号凭证及其他持久化数据会自动存入 `data/` 目录。\n\n"
             "**🚀 一键启动:**\n"
             "在当前目录下先执行 `myfish sync`，再执行 `myfish run`\n"
