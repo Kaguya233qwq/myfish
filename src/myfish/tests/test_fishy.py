@@ -22,8 +22,8 @@ from myfish.adapters.fish.listings import FishListing, FishListingPage
 from myfish.adapters.fish.model import FishOrder, OrderStatus
 from myfish.builtin_plugins.fishy import Runtime, plugin
 from myfish.builtin_plugins.fishy.auth import AuthError
+from myfish.builtin_plugins.fishy.config import Settings
 from myfish.builtin_plugins.fishy.service import Preconditions, Service
-from myfish.builtin_plugins.fishy.settings import Settings
 from myfish.builtin_plugins.fishy.store import Store
 from myfish.builtin_plugins.fishy.web import ProductInput, create_app
 from myfish.core.bot import Bot

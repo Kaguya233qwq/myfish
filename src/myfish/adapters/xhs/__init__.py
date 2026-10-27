@@ -13,6 +13,7 @@ from myfish.core.message import MessageChain, MessageSegment, Text
 from myfish.core.registry import AdapterRegistry
 
 from .api import XhsAPI, XhsAPIError
+from .config import XhsConfig
 from .device import DeviceProfile
 from .events import notification_event
 from .message import decode_content
@@ -23,7 +24,6 @@ from .model import (
     NotificationCategory,
     NotificationPush,
     PushMessage,
-    XhsConfig,
 )
 from .stream import XhsStream
 from .utils import get_auth_file, json_shape, now_ms

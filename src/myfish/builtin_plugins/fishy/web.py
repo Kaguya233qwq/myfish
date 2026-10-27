@@ -25,8 +25,8 @@ from myfish.adapters.fish.api import FishAPIError, FishPublishPreparationError
 from myfish.adapters.fish.model import PublishCategory
 
 from .auth import Auth, AuthError, SessionUser
+from .config import Settings
 from .service import Preconditions, Service
-from .settings import Settings
 
 
 async def current_user(request: Request) -> SessionUser:

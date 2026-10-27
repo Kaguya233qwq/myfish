@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 from myfish.adapters.fish import FishAdapter
 from myfish.adapters.fish.api import FishAPI
 from myfish.builtin_plugins.fishy import Runtime
-from myfish.builtin_plugins.fishy.settings import Settings
+from myfish.builtin_plugins.fishy.config import Settings
 
 
 async def main():

@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from myfish.adapters.xhs import XhsAdapter
 from myfish.adapters.xhs.api import XhsAPI
-from myfish.adapters.xhs.model import PushMessage, XhsConfig
+from myfish.adapters.xhs.config import XhsConfig
+from myfish.adapters.xhs.model import PushMessage
 from myfish.core.message import Image, MessageChain, Text
 
 

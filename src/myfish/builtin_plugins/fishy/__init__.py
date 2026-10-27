@@ -16,7 +16,7 @@ from myfish.core.config import get_config
 from myfish.core.plugin import Plugin, PluginMetadata
 from myfish.core.storage import StorageManager
 
-from .settings import Settings
+from .config import Settings
 
 if TYPE_CHECKING:
     import uvicorn

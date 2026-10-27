@@ -1,16 +1,21 @@
+from __future__ import annotations
+
 import importlib
 import inspect
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from myfish.core.registry import AdapterRegistry
 
-from .config import BotConfig
+from .config import AdapterConfig, BotConfig
 from .dependency import plugin_entries
 from .logger import logger
 from .plugin import Plugin
+
+if TYPE_CHECKING:
+    from .engine import Engine
 
 
 class PluginManager:
@@ -93,7 +98,7 @@ class PluginManager:
                 logger.error(f"❌ 加载插件 {file.name} 失败: {e}")
 
 
-def load_adapters(adapter_configs: list, engine):
+def load_adapters(adapter_configs: list[AdapterConfig], engine: Engine):
     """
     动态加载适配器模块并挂载到引擎
     """
@@ -102,8 +107,10 @@ def load_adapters(adapter_configs: list, engine):
         return
 
     for conf in adapter_configs:
+        if not conf.enabled:
+            continue
         adapter_id = conf.id
-        module_name = getattr(conf, "module", None) or f"myfish.adapters.{adapter_id}"
+        module_name = f"myfish.adapters.{adapter_id}"
 
         try:
             logger.debug(f"正在加载外部适配器包: {module_name}")
@@ -116,7 +123,7 @@ def load_adapters(adapter_configs: list, engine):
 
         try:
             logger.info(f"正在装载适配器: [{adapter_id}]...")
-            config_dict = getattr(conf, "config", {})
+            config_dict = conf.config
             adapter_instance = AdapterRegistry.build(adapter_id, **config_dict)
             engine.add_adapter(adapter_instance)
             logger.success(f"✅ 适配器 [{adapter_id}] 装载成功")

@@ -1,10 +1,15 @@
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import Field, StrictBool
+
+from myfish.core.config import BaseConfig, ConfigRegistry
 
 
-class Settings(BaseModel):
-    enabled: bool = False
+@ConfigRegistry.plugin("fishy")
+class Settings(BaseConfig):
+    comment = ("渔渔商品管理后台。", "启用后执行 myfish sync 安装依赖。")
+
+    enabled: StrictBool = Field(default=False, description="是否启用插件")
     host: str = "127.0.0.1"
     port: int = Field(default=8787, ge=1, le=65535)
     secure_cookies: bool = False

@@ -12,12 +12,12 @@ import httpx
 if not importlib.util.find_spec("fastapi") or not importlib.util.find_spec("uvicorn"):
     raise unittest.SkipTest("商品擦亮测试需要 fishy 可选依赖")
 from myfish.adapters.fish.api import FishPolishError
+from myfish.builtin_plugins.fishy.config import Settings
 from myfish.builtin_plugins.fishy.polish import (
     ALREADY_POLISHED_MESSAGE,
     INELIGIBLE_ERRORS,
 )
 from myfish.builtin_plugins.fishy.service import Preconditions, Service
-from myfish.builtin_plugins.fishy.settings import Settings
 from myfish.builtin_plugins.fishy.store import Store
 from myfish.builtin_plugins.fishy.web import ProductInput, create_app
 

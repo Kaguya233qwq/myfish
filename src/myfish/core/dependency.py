@@ -32,7 +32,7 @@ def plugin_entries(directory: Path, configs: dict, log=None):
     if not directory.is_dir():
         return
     for path in sorted(directory.iterdir()):
-        if path.name.startswith(("_", ".")):
+        if path.name.startswith(("_", ".")) or path.name.endswith(".config.py"):
             continue
         package = path.is_dir() and (path / "__init__.py").is_file()
         module = path.is_file() and path.suffix == ".py"
@@ -66,7 +66,10 @@ class PluginDependencies:
         ).resolve()
         extras = (
             ["xhs"]
-            if any(adapter.id == "xhs" for adapter in self.config.adapters)
+            if any(
+                adapter.id == "xhs" and adapter.enabled
+                for adapter in self.config.adapters
+            )
             else []
         )
         files = []

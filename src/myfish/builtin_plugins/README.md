@@ -31,8 +31,10 @@ example/
 enabled = false
 ```
 
-内建与外部插件使用相同规则。禁用的入口不会被导入，不会注册处理器或执行启动、关闭钩子。
-修改后重启生效。Fishy 默认关闭，其他插件默认加载；开启 Fishy 使用 `[plugins.fishy]` 的 `enabled = true`。
+内建与外部插件使用相同规则。禁用的运行入口不会被导入，不会注册处理器或执行启动、关闭钩子。
+修改后重启生效。Fishy 默认关闭，Echo 默认开启；注册配置模型的插件使用其 `enabled` 默认值，未注册的插件沿用默认加载。开启 Fishy 使用 `[plugins.fishy]` 的 `enabled = true`。
+
+包插件可在 `config.py` 中使用 `@ConfigRegistry.plugin("插件 ID")` 注册继承 `BaseConfig` 的轻量配置模型；单文件插件使用同级的 `名称.config.py`。配置入口独立于运行入口加载，不应依赖可选依赖或启动业务。模型支持字段说明、`comment` 配置块注释及迁移规则，详见 [配置开发文档](../../../docs/configuration.md)。
 
 回声插件默认开启，文本消息需以 `echo` 开头，图片消息直接触发回复。设置 `[plugins.echo]` 的 `enabled = false` 可关闭插件。
 

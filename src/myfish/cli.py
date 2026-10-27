@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import os
 import runpy
 import subprocess
 import sys
@@ -20,6 +21,13 @@ def init_project(project_name: str):
         target_dir.mkdir()
         (target_dir / "plugins").mkdir()
         (target_dir / "data").mkdir()
+        from myfish.core.config import ConfigManager
+
+        ConfigManager._generate_default_config(target_dir / "config.toml")
+        (target_dir / ".gitignore").write_text(
+            "data/\n.myfish/\n.venv/\n__pycache__/\nconfig.toml\n*.toml.bak.*\n*.toml.schema.json\n.config-*\n",
+            encoding="utf-8",
+        )
 
         readme_text = (
             f"# {project_name}\n\n"
@@ -112,23 +120,47 @@ def main():
         "run", help="启动机器人引擎 (自动挂载当前目录下的 plugins 和 data)"
     )
 
-    sync_parser = subparsers.add_parser("sync", help="同步启用插件的依赖到独立运行环境")
+    sync_parser = subparsers.add_parser(
+        "sync", help="迁移配置，并同步启用组件的运行依赖"
+    )
     sync_parser.add_argument("--upgrade", action="store_true", help="更新锁定版本")
+
+    config_parser = subparsers.add_parser("config", help="检查或迁移配置")
+    config_commands = config_parser.add_subparsers(dest="config_command", required=True)
+    config_commands.add_parser("check", help="预览配置变化和校验问题，不写入文件")
+    config_commands.add_parser("sync", help="生成或迁移配置，不安装依赖")
 
     args = parser.parse_args()
 
     if args.command == "init":
         init_project(args.name)
     else:
-        from myfish.core.config import load_config
+        from myfish.core.config import (
+            BotConfig,
+            ConfigBuilder,
+            ConfigManager,
+            load_config,
+        )
         from myfish.core.dependency import DependencyError, PluginDependencies
 
         try:
             if args.command == "run":
                 run_bot()
             elif args.command == "sync":
+                ConfigManager.sync_config()
                 PluginDependencies(load_config()).sync(upgrade=args.upgrade)
                 logger.success("插件依赖同步完成，执行 myfish run 启动")
+            elif args.command == "config":
+                if args.config_command == "sync":
+                    ConfigManager.sync_config()
+                else:
+                    path = Path(os.getenv("MYFISH_CONFIG_PATH", "config.toml"))
+                    compiled = ConfigBuilder(BotConfig).compile(path)
+                    for entry in (*compiled.changes, *compiled.notes, *compiled.issues):
+                        logger.info("{}", entry)
+                    if compiled.changed or compiled.issues:
+                        raise SystemExit(1)
+                    logger.success("配置检查通过")
         except (DependencyError, OSError, ValueError) as exc:
             logger.error(str(exc))
             raise SystemExit(1) from exc

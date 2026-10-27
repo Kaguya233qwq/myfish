@@ -10,18 +10,14 @@ import httpx
 
 from myfish.adapters.xhs import XhsAdapter
 from myfish.adapters.xhs.api import XhsAPI, XhsAPIError
+from myfish.adapters.xhs.config import XhsConfig
 from myfish.adapters.xhs.events import (
     XhsCommentEvent,
     XhsFollowEvent,
     XhsLikeEvent,
     notification_event,
 )
-from myfish.adapters.xhs.model import (
-    Notification,
-    NotificationPage,
-    NotificationPush,
-    XhsConfig,
-)
+from myfish.adapters.xhs.model import Notification, NotificationPage, NotificationPush
 from myfish.adapters.xhs.stream import decode_frame
 from myfish.core.bot import Bot
 from myfish.core.engine import Engine

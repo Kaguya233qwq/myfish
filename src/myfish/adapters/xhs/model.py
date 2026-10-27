@@ -333,13 +333,6 @@ class PushToken(BaseModel):
     )
 
 
-class XhsConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
-    receive_offline: bool = False
-    reconnects: int = Field(default=5, ge=0, le=10)
-
-
 class IncomingMessage(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 

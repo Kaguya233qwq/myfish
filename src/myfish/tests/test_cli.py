@@ -25,9 +25,11 @@ class CliTests(unittest.TestCase):
             with (
                 patch.object(sys, "argv", args),
                 patch("myfish.core.config.load_config"),
+                patch("myfish.core.config.ConfigManager.sync_config") as config_sync,
                 patch("myfish.core.dependency.PluginDependencies") as factory,
             ):
                 cli.main()
+                config_sync.assert_called_once_with()
                 factory.return_value.sync.assert_called_once_with(upgrade=upgrade)
 
     def test_run_refuses_unsynchronized_environment(self) -> None:

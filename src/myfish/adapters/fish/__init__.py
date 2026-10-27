@@ -29,6 +29,7 @@ from .api import (
     FishWSRejected,
     token_from_response,
 )
+from .config import FishConfig
 from .message import (
     RecievedMessagePayload,
     auto_encode,
@@ -75,7 +76,7 @@ class FishAdapter(BaseAdapter["FishAPI"]):
 
     @classmethod
     def setup(cls, **kwargs) -> "FishAdapter":
-        cookies = kwargs.get("cookies")
+        cookies = FishConfig.model_validate(kwargs).cookies
         if not cookies:
             cookies = load_local_auth()
         api_instance = FishAPI(cookies=cookies)

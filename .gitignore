@@ -207,6 +207,9 @@ __marimo__/
 plugins/
 data/
 config.toml
+*.toml.bak.*
+*.toml.schema.json
+.config-*
 
 # VS Code workspace settings
 .vscode/*
