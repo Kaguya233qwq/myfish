@@ -10,6 +10,7 @@ from myfish.adapters.bilibili.api import (
 )
 from myfish.adapters.bilibili.model import (
     LiveSearchPage,
+    SearchCourse,
     SearchPage,
     SearchQuery,
     SearchUser,
@@ -157,6 +158,33 @@ class BilibiliSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item.type for item in result.items], [item["type"] for item in records]
         )
+
+    async def test_video_search_preserves_mixed_course_results(self):
+        course = {
+            "type": "ketang",
+            "id": 26368,
+            "aid": 26368,
+            "bvid": "",
+            "mid": 2,
+            "author": "teacher",
+            "title": '<em class="keyword">Python</em>课程',
+        }
+        data = search_data([video(), course, video()])
+        async with BilibiliAPI(
+            {"buvid3": "device"},
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"code": 0, "data": data})
+            ),
+        ) as api:
+            api._wbi = "a" * 32, "b" * 32
+            api._wbi_loaded = time.monotonic()
+            result = await api.search("Python")
+        self.assertEqual(
+            [type(item) for item in result.items],
+            [SearchVideo, SearchCourse, SearchVideo],
+        )
+        self.assertEqual(result.items[1].title, "Python课程")
+        self.assertEqual(result.items[1].id, 26368)
 
     async def test_combined_live_search_keeps_rooms_and_streamers_separate(self):
         data = search_data(

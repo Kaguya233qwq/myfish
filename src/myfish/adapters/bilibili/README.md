@@ -251,7 +251,7 @@ API 返回类型化模型；非成功业务码抛出 `BilibiliAPIError`，响应
 
 不适用于当前分类的非默认筛选值、无效分类及无效排序会在请求前抛出 `ValueError`。
 
-普通分类返回 `SearchPage`，包含 `items`、`page`、`page_size`、`total` 和 `pages`。`items` 使用 `SearchVideo`、`SearchUser` 等类型化模型，保留额外平台字段，标题和用户名移除关键词高亮标签。`kind="live"` 返回 `LiveSearchPage`，通过 `items.live_room` 和 `items.live_user` 分别获取直播间与主播。
+普通分类返回 `SearchPage`，包含 `items`、`page`、`page_size`、`total` 和 `pages`。`items` 使用 `SearchVideo`、`SearchUser` 等类型化模型，保留额外平台字段，标题和用户名移除关键词高亮标签。视频搜索可能混入 `ketang` 课堂条目，使用 `SearchCourse` 单独表示；其 ID 不作为视频 AV 号使用。`kind="live"` 返回 `LiveSearchPage`，通过 `items.live_room` 和 `items.live_user` 分别获取直播间与主播。
 
 ```python
 from myfish.adapters.bilibili.model import SearchPage, SearchVideo

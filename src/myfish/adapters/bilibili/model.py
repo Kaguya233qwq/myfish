@@ -636,6 +636,14 @@ class SearchVideo(SearchItem):
     pic: str = ""
 
 
+class SearchCourse(SearchItem):
+    type: Literal["ketang"]
+    id: int = Field(gt=0)
+    title: str
+    mid: int = Field(ge=0)
+    author: str = ""
+
+
 class SearchUser(SearchItem):
     type: Literal["bili_user"]
     mid: int = Field(gt=0)
@@ -691,6 +699,7 @@ class SearchPhoto(SearchItem):
 
 SearchResult = Annotated[
     SearchVideo
+    | SearchCourse
     | SearchUser
     | SearchArticle
     | SearchMedia
