@@ -18,11 +18,23 @@ from .api import BilibiliAPI, BilibiliAPIError, BilibiliProtocolError
 from .events import (
     BilibiliDanmakuEvent,
     BilibiliGiftEvent,
+    BilibiliGuardBuyEvent,
     BilibiliLiveEvent,
     BilibiliLiveInteractionEvent,
     BilibiliLiveStatusEvent,
+    BilibiliSuperChatDeleteEvent,
+    BilibiliSuperChatEvent,
 )
-from .model import ApiResponse, LiveDanmaku, LiveGift, LiveInteraction, LivePacket
+from .model import (
+    ApiResponse,
+    LiveDanmaku,
+    LiveGift,
+    LiveGuardBuy,
+    LiveInteraction,
+    LivePacket,
+    LiveSuperChat,
+    LiveSuperChatDelete,
+)
 
 _HEADER = struct.Struct(">IHHII")
 _MAX_PACKET = 16 * 1024 * 1024
@@ -164,6 +176,21 @@ def live_event(
             return BilibiliGiftEvent(
                 *common, _timestamp(gift.timestamp, timestamp), payload, gift
             )
+        if command in ("SUPER_CHAT_MESSAGE", "SUPER_CHAT_MESSAGE_JPN"):
+            message = LiveSuperChat.model_validate(payload.get("data"))
+            return BilibiliSuperChatEvent(
+                *common, _timestamp(message.start_time, timestamp), payload, message
+            )
+        if command == "SUPER_CHAT_MESSAGE_DELETE":
+            deletion = LiveSuperChatDelete.model_validate(payload.get("data"))
+            return BilibiliSuperChatDeleteEvent(
+                *common, timestamp, payload, deletion.ids
+            )
+        if command == "GUARD_BUY":
+            purchase = LiveGuardBuy.model_validate(payload.get("data"))
+            return BilibiliGuardBuyEvent(
+                *common, _timestamp(purchase.start_time, timestamp), payload, purchase
+            )
         if command in ("INTERACT_WORD", "INTERACT_WORD_V2"):
             data = payload.get("data")
             if not isinstance(data, dict):
@@ -205,6 +232,7 @@ class LiveClient:
         self.account_id = account_id
         self.callback = callback
         self._last_heartbeat = 0.0
+        self._live_status: bool | None = None
 
     async def _dispatch(self, packet: LivePacket, room_id: int) -> None:
         if packet.operation == 3:
@@ -214,7 +242,14 @@ class LiveClient:
                 payload = _JSON.validate_json(packet.body)
             except ValidationError:
                 raise BilibiliProtocolError("Invalid live command JSON") from None
-            await self.callback(live_event(self.account_id, room_id, payload))
+            event = live_event(self.account_id, room_id, payload)
+            if isinstance(event, BilibiliLiveStatusEvent):
+                if event.live == self._live_status:
+                    return
+                await self.callback(event)
+                self._live_status = event.live
+            else:
+                await self.callback(event)
 
     async def _receive(self, socket: ClientConnection, room_id: int) -> None:
         async for frame in socket:

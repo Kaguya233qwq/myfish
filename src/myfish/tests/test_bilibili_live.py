@@ -22,9 +22,12 @@ from myfish.adapters.bilibili.config import BilibiliConfig
 from myfish.adapters.bilibili.events import (
     BilibiliDanmakuEvent,
     BilibiliGiftEvent,
+    BilibiliGuardBuyEvent,
     BilibiliLiveEvent,
     BilibiliLiveInteractionEvent,
     BilibiliLiveStatusEvent,
+    BilibiliSuperChatDeleteEvent,
+    BilibiliSuperChatEvent,
 )
 from myfish.adapters.bilibili.live import (
     LiveClient,
@@ -53,6 +56,39 @@ def connection():
             "host_list": [{"host": "broadcastlv.chat.bilibili.com", "wss_port": 443}],
         }
     )
+
+
+def super_chat():
+    return {
+        "cmd": "SUPER_CHAT_MESSAGE",
+        "data": {
+            "id": "9007199254740993",
+            "uid": "2",
+            "user_info": {"uname": "test", "guard_level": 3},
+            "message": "测试留言",
+            "price": 30,
+            "start_time": 1700000000,
+            "end_time": 1700000060,
+            "time": 60,
+        },
+    }
+
+
+def guard_buy():
+    return {
+        "cmd": "GUARD_BUY",
+        "data": {
+            "uid": 2,
+            "username": "test",
+            "guard_level": 3,
+            "num": 1,
+            "price": 198000,
+            "gift_id": 10003,
+            "gift_name": "舰长",
+            "start_time": 1700000000,
+            "end_time": 1700000000,
+        },
+    }
 
 
 class BilibiliLiveProtocolTests(unittest.TestCase):
@@ -144,6 +180,106 @@ class BilibiliLiveProtocolTests(unittest.TestCase):
                 self.assertEqual(event.interaction.uid, 2)
                 self.assertEqual(event.timestamp_ms, 3000)
 
+    def test_super_chat_variants_preserve_identity_text_and_price(self):
+        for command, translation in (
+            ("SUPER_CHAT_MESSAGE", "message_trans"),
+            ("SUPER_CHAT_MESSAGE_JPN", "message_jpn"),
+        ):
+            data = super_chat()
+            data["cmd"] = command
+            data["data"][translation] = "翻译文本"
+            with self.subTest(command=command):
+                event = live_event("1", 100, data)
+                self.assertIsInstance(event, BilibiliSuperChatEvent)
+                self.assertEqual(event.event_type, "bilibili.live.super_chat")
+                self.assertEqual(event.super_chat.id, 9007199254740993)
+                self.assertEqual(event.super_chat.uid, 2)
+                self.assertEqual(event.super_chat.uname, "test")
+                self.assertEqual(event.super_chat.message, "测试留言")
+                self.assertEqual(event.super_chat.message_trans, "翻译文本")
+                self.assertEqual(event.super_chat.price, 30)
+                self.assertEqual(event.super_chat.time, 60)
+                self.assertEqual(event.super_chat.end_time, 1700000060)
+                self.assertEqual(event.timestamp_ms, 1700000000000)
+                self.assertEqual(event.room_id, 100)
+                self.assertEqual(event.command, command)
+                self.assertIs(event.raw_payload, data)
+
+    def test_super_chat_allows_masked_users_and_optional_display_fields(self):
+        data = super_chat()
+        data["data"]["uid"] = 0
+        data["data"]["user_info"] = {"uname": "*"}
+        event = live_event("1", 100, data)
+        self.assertIsInstance(event, BilibiliSuperChatEvent)
+        self.assertEqual(event.super_chat.uid, 0)
+        self.assertEqual(event.super_chat.face, "")
+        self.assertEqual(event.super_chat.guard_level, 0)
+        self.assertEqual(event.super_chat.message_trans, "")
+
+    def test_super_chat_deletion_has_multiple_precise_ids(self):
+        payload = {
+            "cmd": "SUPER_CHAT_MESSAGE_DELETE",
+            "data": {"ids": [1, "9007199254740993"]},
+            "send_time": 1700000000000,
+        }
+        event = live_event("1", 100, payload)
+        self.assertIsInstance(event, BilibiliSuperChatDeleteEvent)
+        self.assertEqual(event.event_type, "bilibili.live.super_chat_delete")
+        self.assertEqual(event.ids, [1, 9007199254740993])
+        self.assertEqual(event.timestamp_ms, 1700000000000)
+        self.assertIs(event.raw_payload, payload)
+
+    def test_guard_purchase_preserves_level_quantity_and_platform_price(self):
+        for level, name in ((1, "总督"), (2, "提督"), (3, "舰长")):
+            data = guard_buy()
+            data["data"].update(guard_level=level, gift_name=name, num=2)
+            with self.subTest(level=level):
+                event = live_event("1", 100, data)
+                self.assertIsInstance(event, BilibiliGuardBuyEvent)
+                self.assertEqual(event.event_type, "bilibili.live.guard_buy")
+                self.assertEqual(event.purchase.uname, "test")
+                self.assertEqual(event.purchase.uid, 2)
+                self.assertEqual(event.purchase.guard_level, level)
+                self.assertEqual(event.purchase.num, 2)
+                self.assertEqual(event.purchase.price, 198000)
+                self.assertEqual(event.purchase.gift_name, name)
+                self.assertEqual(event.purchase.end_time, 1700000000)
+                self.assertEqual(event.timestamp_ms, 1700000000000)
+                self.assertIs(event.raw_payload, data)
+
+    def test_malformed_paid_events_fall_back_without_logging_content(self):
+        payloads = [
+            {"cmd": "SUPER_CHAT_MESSAGE", "data": {}},
+            {"cmd": "GUARD_BUY", "data": None},
+            {"cmd": "SUPER_CHAT_MESSAGE_DELETE", "data": {"ids": ["invalid"]}},
+        ]
+        for field, value in (("price", -1), ("id", 0)):
+            data = super_chat()
+            data["data"][field] = value
+            payloads.append(data)
+        for field, value in (("guard_level", 0), ("num", 0)):
+            data = guard_buy()
+            data["data"][field] = value
+            payloads.append(data)
+        for data in payloads:
+            with (
+                self.subTest(data=data),
+                patch("myfish.adapters.bilibili.live.logger") as log,
+            ):
+                event = live_event("1", 100, data)
+                self.assertIs(type(event), BilibiliLiveEvent)
+                self.assertIs(event.raw_payload, data)
+                log.debug.assert_called_once_with(
+                    "[Bilibili] 未解析的直播事件: cmd={}, fields={}",
+                    data["cmd"],
+                    sorted(data),
+                )
+
+    def test_guard_toast_is_not_reported_as_another_purchase(self):
+        data = guard_buy()
+        data["cmd"] = "USER_TOAST_MSG"
+        self.assertIs(type(live_event("1", 100, data)), BilibiliLiveEvent)
+
     def test_unknown_and_malformed_events_preserve_raw_payload(self):
         for data in (
             {"cmd": "FUTURE", "data": {"future": True}},
@@ -177,6 +313,49 @@ class BilibiliLiveClientTests(unittest.IsolatedAsyncioTestCase):
         )
         self.callback = AsyncMock()
         self.client = LiveClient(self.api, 1, "3", self.callback)
+
+    async def test_compressed_paid_events_reach_adapter_callback_in_order(self):
+        adapter = BilibiliAdapter(self.api, BilibiliConfig(), Path("unused"))
+        adapter.set_callback(self.callback)
+        self.client.callback = adapter._receive_live
+        payloads = [
+            super_chat(),
+            {"cmd": "SUPER_CHAT_MESSAGE_DELETE", "data": {"ids": [9007199254740993]}},
+            guard_buy(),
+        ]
+        body = b"".join(
+            encode_packet(5, json.dumps(data).encode()) for data in payloads
+        )
+        for decoded in decode_packets(packet(5, zlib.compress(body), 2)):
+            await self.client._dispatch(decoded, 100)
+        events = [call.args[0] for call in self.callback.await_args_list]
+        self.assertEqual(
+            [type(event) for event in events],
+            [
+                BilibiliSuperChatEvent,
+                BilibiliSuperChatDeleteEvent,
+                BilibiliGuardBuyEvent,
+            ],
+        )
+        self.assertTrue(
+            all(event.account_id == "3" and event.room_id == 100 for event in events)
+        )
+
+    async def test_repeated_status_is_suppressed_and_later_changes_are_dispatched(self):
+        for command in ("LIVE", "LIVE", "PREPARING", "PREPARING", "LIVE"):
+            await self.client._dispatch(
+                LivePacket(5, 1, json.dumps({"cmd": command}).encode()), 100
+            )
+        events = [call.args[0] for call in self.callback.await_args_list]
+        self.assertEqual([event.live for event in events], [True, False, True])
+
+    async def test_failed_status_callback_can_be_retried(self):
+        self.callback.side_effect = [RuntimeError("callback failed"), None]
+        packet = LivePacket(5, 1, b'{"cmd":"LIVE"}')
+        with self.assertRaises(RuntimeError):
+            await self.client._dispatch(packet, 100)
+        await self.client._dispatch(packet, 100)
+        self.assertEqual(self.callback.await_count, 2)
 
     async def test_authentication_and_coalesced_events_are_dispatched(self):
         socket = AsyncMock(spec=ClientConnection)

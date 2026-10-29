@@ -2,7 +2,7 @@
 
 基于 B站网页接口接收私信、账号通知及直播事件，提供文本发送、内容搜索、视频和用户互动、字幕及音视频流查询。实现沿用 Bilink 的平台协议经验，使用 Myfish 的适配器、消息和插件契约。
 
-扫码登录、私信接收、“回复我的”通知、点赞增量及 @ 通知已由用户完成真实账号验收。Cookie 轮换恢复、极端分页边界、陌生人会话覆盖范围和平台限流行为仍需分别验证；评论读取与写入接口目前完成离线测试，尚待真实验收。
+扫码登录、私信接收、“回复我的”通知、点赞增量及 @ 通知已由用户完成真实账号验收。Cookie 轮换恢复、极端分页边界、陌生人会话覆盖范围和平台限流行为仍需分别验证；评论回复和点赞已由用户完成真实验收，其余互动操作的验收范围见后文。
 
 ## 配置与启动
 
@@ -271,16 +271,23 @@ if isinstance(result, SearchPage):
 
 在 `[adapters.config]` 中设置 `live_rooms = [12345]` 订阅房间，将示例 ID 替换为需要监听的房间 ID。默认空列表不连接直播间；配置中的相同 ID 自动去重，短号会先解析为真实房间 ID。
 
-每个房间使用独立 WebSocket 连接，直播接收不受私信轮询间隔影响。连接使用当前账号获取 WBI 鉴权令牌和设备 Cookie，协商协议 2，通过标准库 `zlib` 解压批量消息。客户端每 30 秒发送应用层心跳，60 秒未收到心跳回复时重新连接；网络异常按 1～60 秒退避，重连时重新获取令牌并轮换节点。框架退出时取消所有直播任务并关闭连接。
+每个房间使用独立 WebSocket 连接，直播接收不受私信轮询间隔影响。连接使用当前账号获取 WBI 鉴权令牌和设备 Cookie，协商协议 2，通过标准库 `zlib` 解压批量消息。客户端每 30 秒发送应用层心跳，60 秒未收到心跳回复时重新连接；网络异常按 1～60 秒退避，重连时重新获取令牌并轮换节点。框架退出时取消所有直播任务并关闭连接。每次监听中，相同开播状态只分发一次，状态变化后再分发；此记录保留到监听任务结束，不持久化。
 
 | 事件类 | 事件名 | 内容 |
 | --- | --- | --- |
 | `BilibiliDanmakuEvent` | `bilibili.live.danmaku` | `danmaku` 提供 `uid`、`uname`、`text` 和平台时间戳 |
 | `BilibiliGiftEvent` | `bilibili.live.gift` | `gift` 提供赠送者、礼物 ID、名称、数量及平台币种和计数 |
+| `BilibiliSuperChatEvent` | `bilibili.live.super_chat` | `super_chat` 提供留言 ID、发送者、原文、翻译、金额和展示时间 |
+| `BilibiliSuperChatDeleteEvent` | `bilibili.live.super_chat_delete` | `ids` 提供被删除的醒目留言 ID 列表 |
+| `BilibiliGuardBuyEvent` | `bilibili.live.guard_buy` | `purchase` 提供购买者、大航海等级、数量、礼物及平台价格 |
 | `BilibiliLiveInteractionEvent` | `bilibili.live.interaction` | `interaction` 提供用户信息和 `kind`：`enter`、`follow`、`share` 或 `unknown` |
 | `BilibiliLiveStatusEvent` | `bilibili.live.status` | `live=True` 开播，`live=False` 主播准备中或下播 |
 
 事件均继承 `BilibiliLiveEvent`，包含 `account_id`、真实 `room_id`、`command`、`timestamp_ms` 和 `raw_payload`。旧版 `INTERACT_WORD` 和新版 Protobuf `INTERACT_WORD_V2` 均转换为互动事件。平台隐藏用户身份时，保留 `uid=0` 及平台提供的昵称；不猜测真实用户。
+
+醒目留言的 `SUPER_CHAT_MESSAGE` 和日语版本 `SUPER_CHAT_MESSAGE_JPN` 均转换为 `BilibiliSuperChatEvent`，`message_trans` 提供平台返回的翻译，无翻译时为空字符串。`id` 与删除事件的 `ids` 使用整数，支持平台的数字字符串 ID。`price` 单位为人民币元，`start_time`、`end_time` 为平台时间戳，`time` 为展示秒数。不同命令或重连期间可能重复上报同一留言，插件可按 `room_id` 和留言 ID 去重。
+
+上舰事件来自 `GUARD_BUY`。`purchase.guard_level` 的 `1`、`2`、`3` 分别代表总督、提督、舰长；`price` 保留平台金瓜子标价，1000 金瓜子对应 1 元，不根据数量推算实付金额。`start_time`、`end_time` 保留原值，不作为会员有效期解释。`USER_TOAST_MSG` 等庆祝广播保留为通用直播事件，不再次生成购买事件。
 
 ```python
 from myfish.adapters.bilibili.events import BilibiliDanmakuEvent
@@ -296,11 +303,42 @@ async def on_danmaku(event: BilibiliDanmakuEvent) -> None:
     )
 ```
 
+监听醒目留言与上舰事件：
+
+```python
+from myfish.adapters.bilibili.events import (
+    BilibiliGuardBuyEvent,
+    BilibiliSuperChatEvent,
+)
+
+
+@plugin.on_event(BilibiliSuperChatEvent)
+async def on_super_chat(event: BilibiliSuperChatEvent) -> None:
+    message = event.super_chat
+    logger.info(
+        "醒目留言: user={}, amount={}, text={}",
+        message.uname,
+        message.price,
+        message.message,
+    )
+
+
+@plugin.on_event(BilibiliGuardBuyEvent)
+async def on_guard_buy(event: BilibiliGuardBuyEvent) -> None:
+    purchase = event.purchase
+    logger.info(
+        "上舰: user={}, level={}, count={}",
+        purchase.uname,
+        purchase.guard_level,
+        purchase.num,
+    )
+```
+
 直播事件属于平台业务事件。发送弹幕通过 `bot.adapter.api.send_live_danmaku(room_id, text)` 显式调用，使用 HTTP 接口；返回 `LiveSendReceipt`，保留服务端的 `mode_info`。`mode` 可为 `1` 滚动、`4` 底部、`5` 顶部，实际权限及文字长度由平台决定。失败会抛出异常，不自动重发。
 
 未知命令或无法解析的已知命令保留为 `BilibiliLiveEvent`，输出命令和字段名的调试日志。直播推送不写入私信数据库，不补发断线期间的历史事件；关注互动仅代表该直播流上报的行为，不等同于全账号粉丝通知。
 
-鉴权、心跳及真实弹幕接收已通过只读验证。礼物、互动、开播／下播转换及发送弹幕完成离线测试，仍待真实验收。参考：[直播信息流](https://github.com/pskdje/bilibili-API-collect/blob/main/docs/live/message_stream.md)、[直播弹幕](https://github.com/pskdje/bilibili-API-collect/blob/main/docs/live/danmaku.md)。
+鉴权、心跳、真实弹幕接收及开播／下播事件已通过只读验证。礼物、互动、醒目留言及其删除、上舰和发送弹幕完成离线测试，仍待真实验收。参考：[直播信息流](https://github.com/pskdje/bilibili-API-collect/blob/master/docs/live/message_stream.md)、[直播弹幕](https://github.com/pskdje/bilibili-API-collect/blob/master/docs/live/danmaku.md)。
 
 ## 字幕与音视频流
 
@@ -345,7 +383,7 @@ if playback.dash is not None:
 
 `get_video_like_status` 只能反映平台提供的近期点赞状态，返回 `False` 不保证从未点赞。`get_video_favorite_status` 查询是否存在收藏，不提供具体收藏夹归属。业务错误与网络错误会向调用方抛出，不自动重试写入；网络超时后不能直接判断操作是否成功。
 
-分类搜索及关系、点赞、收藏状态已通过真实只读查询。点赞、收藏、关注及取消操作已完成离线测试，仍待指定目标后进行真实账号验收。
+分类搜索及关系、点赞、收藏状态已通过真实只读查询。评论回复和点赞已由用户完成真实验收；视频加入收藏夹已通过真实写入及状态回读验证。关注写入已通过真实操作及关系回读验证。取消关注和取消收藏目前完成离线测试，仍待真实验收。
 
 接口参考：[分类搜索](https://github.com/pskdje/bilibili-API-collect/blob/main/docs/search/search_request.md)、[视频互动](https://github.com/pskdje/bilibili-API-collect/blob/main/docs/video/action.md)、[用户关系](https://github.com/pskdje/bilibili-API-collect/blob/main/docs/user/relation.md)。
 

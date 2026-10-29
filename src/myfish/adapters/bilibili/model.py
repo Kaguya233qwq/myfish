@@ -789,6 +789,40 @@ class LiveGift(BaseModel):
     total_coin: int = Field(default=0, ge=0)
 
 
+class LiveSuperChat(BaseModel):
+    id: int = Field(gt=0)
+    uid: int = Field(ge=0)
+    uname: str = Field(validation_alias=AliasPath("user_info", "uname"))
+    message: str
+    message_trans: str = Field(
+        default="", validation_alias=AliasChoices("message_trans", "message_jpn")
+    )
+    price: int = Field(ge=0)
+    start_time: int = Field(ge=0)
+    end_time: int = Field(ge=0)
+    time: int = Field(default=0, ge=0)
+    face: str = Field(default="", validation_alias=AliasPath("user_info", "face"))
+    guard_level: int = Field(
+        default=0, ge=0, le=3, validation_alias=AliasPath("user_info", "guard_level")
+    )
+
+
+class LiveSuperChatDelete(BaseModel):
+    ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1)
+
+
+class LiveGuardBuy(BaseModel):
+    uid: int = Field(ge=0)
+    uname: str = Field(validation_alias="username")
+    guard_level: int = Field(ge=1, le=3)
+    num: int = Field(gt=0)
+    price: int = Field(ge=0)
+    gift_id: int = Field(gt=0)
+    gift_name: str
+    start_time: int = Field(ge=0)
+    end_time: int = Field(ge=0)
+
+
 class LiveInteraction(BaseModel):
     uid: int = Field(ge=0)
     uname: str

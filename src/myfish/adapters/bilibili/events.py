@@ -12,7 +12,9 @@ from .model import (
     LikeUpdate,
     LiveDanmaku,
     LiveGift,
+    LiveGuardBuy,
     LiveInteraction,
+    LiveSuperChat,
     MentionNotification,
     MentionTarget,
     NotificationUser,
@@ -90,6 +92,27 @@ class BilibiliGiftEvent(BilibiliLiveEvent):
     event_type: ClassVar[str] = "bilibili.live.gift"
 
     gift: LiveGift
+
+
+@dataclass
+class BilibiliSuperChatEvent(BilibiliLiveEvent):
+    event_type: ClassVar[str] = "bilibili.live.super_chat"
+
+    super_chat: LiveSuperChat
+
+
+@dataclass
+class BilibiliSuperChatDeleteEvent(BilibiliLiveEvent):
+    event_type: ClassVar[str] = "bilibili.live.super_chat_delete"
+
+    ids: list[int]
+
+
+@dataclass
+class BilibiliGuardBuyEvent(BilibiliLiveEvent):
+    event_type: ClassVar[str] = "bilibili.live.guard_buy"
+
+    purchase: LiveGuardBuy
 
 
 @dataclass
